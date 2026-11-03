@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>YG · Static Site on Render</title>
+<style>
+:root{--bg:#0b0f17;--fg:#e8eef8;--muted:#8b97ab;--acc:#4ade80;--line:#1c2637}
+*{box-sizing:border-box;margin:0;padding:0}
+body{min-height:100vh;background:radial-gradient(1200px 600px at 15% -10%,#16324a 0%,transparent 60%),radial-gradient(900px 500px at 90% 0%,#2b1c3f 0%,transparent 55%),var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,"PingFang SC","Microsoft YaHei",sans-serif;display:flex;align-items:center;justify-content:center;padding:32px}
+.wrap{width:100%;max-width:880px}
+.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;font-size:13px;color:var(--muted);margin-bottom:28px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 12px var(--acc)}
+h1{font-size:clamp(34px,6vw,60px);line-height:1.08;letter-spacing:-.03em;font-weight:800}
+h1 em{font-style:normal;background:linear-gradient(90deg,#4ade80,#38bdf8,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent}
+p.sub{margin-top:18px;color:var(--muted);font-size:17px;line-height:1.7;max-width:600px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:44px}
+.card{border:1px solid var(--line);border-radius:14px;padding:20px;background:rgba(255,255,255,.02);transition:.2s}
+.card:hover{border-color:#2f4a68;background:rgba(255,255,255,.045);transform:translateY(-2px)}
+.card h3{font-size:15px;margin-bottom:8px;color:#cfe0f5}
+.card span{font-size:13px;color:var(--muted);line-height:1.6;display:block}
+footer{margin-top:48px;padding-top:22px;border-top:1px solid var(--line);display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);align-items:center}
+a{color:#7dd3fc;text-decoration:none}
+a:hover{text-decoration:underline}
+#cnt{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:700}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="badge"><span class="dot"></span> Live on Render · Static Site</div>
+  <h1>你好，<em>YG</em>。</h1>
+  <p class="sub">这是一个纯静态页面，直接托管在 Render 上：没有服务器、没有运行时、没有构建时长。你现在看到的就是线上产物。</p>
+  <div class="grid">
+    <div class="card"><h3>零构建</h3><span>Build Command 留空，Publish Directory 指向仓库根目录，Render 直接把文件发到 CDN。</span></div>
+    <div class="card"><h3>全球边缘</h3><span>静态资源走 Render 的边缘节点，自动签发并续期 TLS 证书。</span></div>
+    <div class="card"><h3>自动部署</h3><span>仓库连上后，每次 push 到 main 触发一次重新发布。</span></div>
+    <div class="card"><h3>自定义域名</h3><span>Settings → Custom Domains，加一条 CNAME 指向本服务即可。</span></div>
+  </div>
+  <footer>
+    <span>本地访问计数 <span id="cnt">1</span></span>
+    <span>·</span>
+    <a href="https://dashboard.render.com" target="_blank" rel="noopener">Render 控制台</a>
+    <span>·</span>
+    <a href="https://github.com/QweQwe-crypto/yg-static-site" target="_blank" rel="noopener">GitHub 仓库</a>
+  </footer>
+</div>
+<script>
+(function(){try{var k='yg_visits';var n=+(localStorage.getItem(k)||0)+1;localStorage.setItem(k,n);document.getElementById('cnt').textContent=n.toLocaleString();}catch(e){}})();
+</script>
+</body>
+</html>
