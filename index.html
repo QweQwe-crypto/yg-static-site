@@ -1,51 +1,605 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>YG · Static Site on Render</title>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学籍信息采集系统</title>
 <style>
-:root{--bg:#0b0f17;--fg:#e8eef8;--muted:#8b97ab;--acc:#4ade80;--line:#1c2637}
-*{box-sizing:border-box;margin:0;padding:0}
-body{min-height:100vh;background:radial-gradient(1200px 600px at 15% -10%,#16324a 0%,transparent 60%),radial-gradient(900px 500px at 90% 0%,#2b1c3f 0%,transparent 55%),var(--bg);color:var(--fg);font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Arial,"PingFang SC","Microsoft YaHei",sans-serif;display:flex;align-items:center;justify-content:center;padding:32px}
-.wrap{width:100%;max-width:880px}
-.badge{display:inline-flex;align-items:center;gap:8px;padding:6px 14px;border:1px solid var(--line);border-radius:999px;font-size:13px;color:var(--muted);margin-bottom:28px}
-.dot{width:8px;height:8px;border-radius:50%;background:var(--acc);box-shadow:0 0 12px var(--acc)}
-h1{font-size:clamp(34px,6vw,60px);line-height:1.08;letter-spacing:-.03em;font-weight:800}
-h1 em{font-style:normal;background:linear-gradient(90deg,#4ade80,#38bdf8,#a78bfa);-webkit-background-clip:text;background-clip:text;color:transparent}
-p.sub{margin-top:18px;color:var(--muted);font-size:17px;line-height:1.7;max-width:600px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:14px;margin-top:44px}
-.card{border:1px solid var(--line);border-radius:14px;padding:20px;background:rgba(255,255,255,.02);transition:.2s}
-.card:hover{border-color:#2f4a68;background:rgba(255,255,255,.045);transform:translateY(-2px)}
-.card h3{font-size:15px;margin-bottom:8px;color:#cfe0f5}
-.card span{font-size:13px;color:var(--muted);line-height:1.6;display:block}
-footer{margin-top:48px;padding-top:22px;border-top:1px solid var(--line);display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);align-items:center}
-a{color:#7dd3fc;text-decoration:none}
-a:hover{text-decoration:underline}
-#cnt{font-variant-numeric:tabular-nums;color:var(--fg);font-weight:700}
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body {
+    font-family:"Microsoft YaHei","PingFang SC","Segoe UI",sans-serif;
+    background:#eef2f7; color:#1e293b; min-height:100vh;
+  }
+  /* ===== 顶栏 ===== */
+  header {
+    background:#fff; border-bottom:1px solid #e2e8f0;
+    padding:0 28px; height:64px; display:flex; align-items:center;
+    justify-content:space-between; position:sticky; top:0; z-index:50;
+    box-shadow:0 1px 2px rgba(15,23,42,.04);
+  }
+  .brand { display:flex; align-items:center; gap:12px; }
+  .logo {
+    width:40px; height:40px; border-radius:10px; flex:none;
+    background:linear-gradient(135deg,#2563eb,#4f46e5);
+    color:#fff; font-size:20px; font-weight:700;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .brand h1 { font-size:17px; font-weight:700; letter-spacing:.5px; }
+  .brand p { font-size:11px; color:#94a3b8; letter-spacing:1px; }
+  nav { display:flex; gap:6px; background:#f1f5f9; border-radius:10px; padding:4px; }
+  nav button {
+    border:0; background:transparent; padding:8px 20px; border-radius:8px;
+    font-size:14px; color:#64748b; cursor:pointer; transition:.18s;
+  }
+  nav button.active { background:#fff; color:#2563eb; font-weight:600; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+  nav button:not(.active):hover { color:#334155; }
+
+  main { max-width:1080px; margin:0 auto; padding:24px 20px 60px; }
+  .panel { display:none; }
+  .panel.active { display:block; animation:fade .25s ease; }
+  @keyframes fade { from{opacity:0; transform:translateY(6px);} to{opacity:1; transform:none;} }
+
+  .card { background:#fff; border-radius:14px; padding:26px 28px; box-shadow:0 1px 3px rgba(15,23,42,.06); }
+
+  .group-title {
+    font-size:15px; font-weight:700; margin:22px 0 14px;
+    display:flex; align-items:center; gap:8px;
+  }
+  .group-title::before { content:""; width:4px; height:16px; border-radius:2px; background:#2563eb; }
+  .card > .group-title:first-child { margin-top:0; }
+
+  .grid { display:grid; grid-template-columns:repeat(3,1fr); gap:14px 18px; }
+  .field span { display:block; font-size:13px; color:#64748b; margin-bottom:6px; }
+  .field span i { color:#ef4444; font-style:normal; margin-left:2px; }
+  input, select {
+    width:100%; padding:10px 12px; font-size:14px; font-family:inherit;
+    border:1px solid #d7dee8; border-radius:8px; background:#fff; color:#1e293b;
+    outline:none; transition:.15s;
+  }
+  input:focus, select:focus { border-color:#2563eb; box-shadow:0 0 0 3px rgba(37,99,235,.12); }
+  input.invalid, select.invalid { border-color:#ef4444; box-shadow:0 0 0 3px rgba(239,68,68,.1); }
+
+  /* ===== 照片 ===== */
+  .photo-box {
+    border:2px dashed #cbd5e1; border-radius:12px; padding:18px;
+    display:flex; align-items:center; gap:20px; background:#f8fafc;
+  }
+  .avatar-lg {
+    width:92px; height:92px; border-radius:50%; flex:none; overflow:hidden;
+    background:linear-gradient(135deg,#dbeafe,#e0e7ff);
+    display:flex; align-items:center; justify-content:center;
+    font-size:30px; color:#64748b; font-weight:600;
+  }
+  .avatar-lg img { width:100%; height:100%; object-fit:cover; display:none; }
+  .photo-box.has-photo .avatar-lg img { display:block; }
+  .photo-box.has-photo .avatar-char { display:none; }
+  .photo-info { font-size:13px; color:#64748b; line-height:1.7; }
+  .photo-btns { margin-top:8px; display:flex; gap:10px; }
+
+  /* ===== 按钮 ===== */
+  .btn {
+    border:0; border-radius:8px; padding:10px 22px; font-size:14px;
+    cursor:pointer; font-family:inherit; transition:.18s;
+  }
+  .btn-primary { background:linear-gradient(135deg,#2563eb,#4f46e5); color:#fff; font-weight:600; }
+  .btn-primary:hover { filter:brightness(1.08); }
+  .btn-ghost { background:#fff; border:1px solid #cbd5e1; color:#475569; }
+  .btn-ghost:hover { border-color:#94a3b8; color:#1e293b; }
+  .btn-danger-ghost { background:#fff; border:1px solid #fecaca; color:#dc2626; }
+  .btn-danger-ghost:hover { background:#fef2f2; }
+  .btn-sm { padding:5px 12px; font-size:12.5px; border-radius:6px; }
+  .actions { display:flex; justify-content:flex-end; gap:12px; margin-top:26px; padding-top:20px; border-top:1px solid #f1f5f9; }
+
+  /* ===== 记录管理 ===== */
+  .stats { display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:18px; }
+  .stat {
+    background:#fff; border-radius:12px; padding:16px 20px;
+    box-shadow:0 1px 3px rgba(15,23,42,.06); display:flex; align-items:center; gap:14px;
+  }
+  .dot { width:38px; height:38px; border-radius:10px; flex:none; display:flex; align-items:center; justify-content:center; font-size:17px; }
+  .stat b { font-size:22px; display:block; }
+  .stat small { font-size:12px; color:#94a3b8; }
+
+  .toolbar { display:flex; gap:10px; margin-bottom:14px; flex-wrap:wrap; }
+  .toolbar input { flex:1; min-width:200px; width:auto; }
+  .table-wrap { background:#fff; border-radius:14px; box-shadow:0 1px 3px rgba(15,23,42,.06); overflow:auto; }
+  table { width:100%; border-collapse:collapse; min-width:860px; }
+  thead th {
+    background:#f8fafc; font-size:12px; color:#64748b; font-weight:600;
+    text-align:left; padding:12px 14px; border-bottom:1px solid #eef2f7; white-space:nowrap;
+  }
+  tbody td { padding:11px 14px; font-size:13.5px; border-bottom:1px solid #f4f6fa; white-space:nowrap; }
+  tbody tr:hover { background:#f8fafc; }
+  tbody tr:last-child td { border-bottom:0; }
+  .avatar-sm {
+    width:36px; height:36px; border-radius:50%; overflow:hidden; flex:none;
+    background:linear-gradient(135deg,#dbeafe,#e0e7ff); color:#475569;
+    display:flex; align-items:center; justify-content:center; font-size:14px; font-weight:600;
+  }
+  .avatar-sm img { width:100%; height:100%; object-fit:cover; }
+  .name-cell { display:flex; align-items:center; gap:10px; }
+  .badge { display:inline-block; padding:3px 10px; border-radius:999px; font-size:12px; font-weight:600; }
+  .b-green { background:#dcfce7; color:#15803d; }
+  .b-blue { background:#dbeafe; color:#1d4ed8; }
+  .b-orange { background:#ffedd5; color:#c2410c; }
+  .b-red { background:#fee2e2; color:#b91c1c; }
+  .b-purple { background:#ede9fe; color:#6d28d9; }
+  .b-gray { background:#f1f5f9; color:#475569; }
+  .ops { display:flex; gap:6px; }
+  .empty { text-align:center; padding:60px 0; color:#94a3b8; font-size:14px; }
+
+  /* ===== 弹窗 ===== */
+  .modal-mask {
+    position:fixed; inset:0; background:rgba(15,23,42,.45); z-index:100;
+    display:none; align-items:center; justify-content:center; padding:20px;
+  }
+  .modal-mask.show { display:flex; animation:fade .2s ease; }
+  .modal {
+    background:#fff; border-radius:16px; width:560px; max-width:100%;
+    max-height:88vh; overflow:auto; animation:pop .22s ease;
+  }
+  @keyframes pop { from{opacity:0; transform:scale(.96) translateY(8px);} to{opacity:1; transform:none;} }
+  .modal-head {
+    display:flex; align-items:center; gap:16px; padding:22px 24px;
+    border-bottom:1px solid #f1f5f9; background:#f8fafc; border-radius:16px 16px 0 0;
+  }
+  .modal-head .avatar-lg { width:72px; height:72px; font-size:24px; }
+  .modal-head h3 { font-size:18px; }
+  .modal-head p { font-size:13px; color:#64748b; margin-top:3px; }
+  .modal-close { margin-left:auto; border:0; background:transparent; font-size:22px; color:#94a3b8; cursor:pointer; line-height:1; }
+  .modal-close:hover { color:#475569; }
+  .detail-grid { display:grid; grid-template-columns:1fr 1fr; gap:0; padding:10px 24px 24px; }
+  .detail-item { padding:12px 4px; border-bottom:1px dashed #eef2f7; }
+  .detail-item.full { grid-column:1/-1; }
+  .detail-item small { display:block; font-size:12px; color:#94a3b8; margin-bottom:4px; }
+  .detail-item b { font-size:14px; font-weight:600; }
+
+  /* ===== Toast ===== */
+  #toast {
+    position:fixed; top:22px; left:50%; transform:translateX(-50%) translateY(-80px);
+    background:#0f172a; color:#fff; padding:11px 24px; border-radius:10px;
+    font-size:14px; z-index:200; transition:.3s; box-shadow:0 8px 24px rgba(0,0,0,.2);
+    pointer-events:none;
+  }
+  #toast.show { transform:translateX(-50%) translateY(0); }
+  #toast.ok { background:#059669; }
+  #toast.err { background:#dc2626; }
+
+  footer { text-align:center; font-size:12px; color:#94a3b8; padding:0 20px 30px; }
+
+  @media (max-width:900px){ .grid{grid-template-columns:1fr 1fr;} .stats{grid-template-columns:1fr 1fr;} }
+  @media (max-width:560px){ .grid{grid-template-columns:1fr;} header{padding:0 16px;} .brand p{display:none;} }
 </style>
 </head>
 <body>
-<div class="wrap">
-  <div class="badge"><span class="dot"></span> Live on Render · Static Site</div>
-  <h1>你好，<em>YG</em>。</h1>
-  <p class="sub">这是一个纯静态页面，直接托管在 Render 上：没有服务器、没有运行时、没有构建时长。你现在看到的就是线上产物。</p>
-  <div class="grid">
-    <div class="card"><h3>零构建</h3><span>Build Command 留空，Publish Directory 指向仓库根目录，Render 直接把文件发到 CDN。</span></div>
-    <div class="card"><h3>全球边缘</h3><span>静态资源走 Render 的边缘节点，自动签发并续期 TLS 证书。</span></div>
-    <div class="card"><h3>自动部署</h3><span>仓库连上后，每次 push 到 main 触发一次重新发布。</span></div>
-    <div class="card"><h3>自定义域名</h3><span>Settings → Custom Domains，加一条 CNAME 指向本服务即可。</span></div>
+
+<header>
+  <div class="brand">
+    <div class="logo">学</div>
+    <div>
+      <h1>学籍信息采集系统</h1>
+      <p>STUDENT RECORD COLLECTION</p>
+    </div>
   </div>
-  <footer>
-    <span>本地访问计数 <span id="cnt">1</span></span>
-    <span>·</span>
-    <a href="https://dashboard.render.com" target="_blank" rel="noopener">Render 控制台</a>
-    <span>·</span>
-    <a href="https://github.com/QweQwe-crypto/yg-static-site" target="_blank" rel="noopener">GitHub 仓库</a>
-  </footer>
+  <nav>
+    <button class="tab active" data-tab="collect">信息采集</button>
+    <button class="tab" data-tab="manage">记录管理</button>
+  </nav>
+</header>
+
+<main>
+  <!-- ============ 采集表单 ============ -->
+  <section id="panel-collect" class="panel active">
+    <form class="card" id="recordForm" novalidate>
+      <h2 class="group-title">基本信息</h2>
+      <div class="grid">
+        <label class="field"><span>姓名<i>*</i></span><input id="name" placeholder="请输入姓名"></label>
+        <label class="field"><span>性别<i>*</i></span>
+          <select id="gender">
+            <option value="">请选择</option><option value="男">男</option><option value="女">女</option>
+          </select>
+        </label>
+        <label class="field"><span>出生日期<i>*</i></span><input id="birth" type="date"></label>
+        <label class="field"><span>民族<i>*</i></span><select id="ethnicity"></select></label>
+      </div>
+
+      <h2 class="group-title">学籍信息</h2>
+      <div class="grid">
+        <label class="field"><span>学校名称<i>*</i></span><input id="school" placeholder="请输入学校全称"></label>
+        <label class="field"><span>层次<i>*</i></span><select id="level"></select></label>
+        <label class="field"><span>专业<i>*</i></span><input id="major" placeholder="请输入专业名称"></label>
+        <label class="field"><span>学制<i>*</i></span>
+          <input id="duration" list="durationList" placeholder="如：4年">
+          <datalist id="durationList">
+            <option value="2年"></option><option value="3年"></option>
+            <option value="4年"></option><option value="5年"></option>
+          </datalist>
+        </label>
+        <label class="field"><span>学历类别<i>*</i></span><select id="eduType"></select></label>
+        <label class="field"><span>学习形式<i>*</i></span><select id="studyMode"></select></label>
+        <label class="field"><span>分院系所</span><input id="department" placeholder="选填"></label>
+      </div>
+
+      <h2 class="group-title">状态信息</h2>
+      <div class="grid">
+        <label class="field"><span>入学日期<i>*</i></span><input id="enrollDate" type="date"></label>
+        <label class="field"><span>学籍状态<i>*</i></span><select id="status"></select></label>
+        <label class="field"><span>离校日期</span><input id="leaveDate" type="date"></label>
+      </div>
+
+      <h2 class="group-title">照片</h2>
+      <div class="photo-box" id="photoBox">
+        <div class="avatar-lg">
+          <span class="avatar-char">照</span>
+          <img id="photoPreview" alt="">
+        </div>
+        <div class="photo-info">
+          上传本人近期免冠证件照（选填）<br>支持 JPG / PNG，系统自动压缩至 300px 内
+          <div class="photo-btns">
+            <button type="button" class="btn btn-ghost btn-sm" onclick="document.getElementById('photoInput').click()">选择照片</button>
+            <button type="button" class="btn btn-danger-ghost btn-sm" id="photoRemove">移除</button>
+          </div>
+        </div>
+        <input type="file" id="photoInput" accept="image/*" hidden>
+      </div>
+
+      <div class="actions">
+        <button type="button" class="btn btn-ghost" id="cancelEdit" style="display:none">取消编辑</button>
+        <button type="button" class="btn btn-ghost" id="formReset">重置</button>
+        <button type="submit" class="btn btn-primary" id="submitBtn">保存记录</button>
+      </div>
+    </form>
+  </section>
+
+  <!-- ============ 记录管理 ============ -->
+  <section id="panel-manage" class="panel">
+    <div class="stats">
+      <div class="stat"><div class="dot" style="background:#dbeafe">📋</div><div><b id="statTotal">0</b><small>记录总数</small></div></div>
+      <div class="stat"><div class="dot" style="background:#dcfce7">✅</div><div><b id="statActive">0</b><small>在籍人数</small></div></div>
+      <div class="stat"><div class="dot" style="background:#ede9fe">🎓</div><div><b id="statGrad">0</b><small>已毕业</small></div></div>
+      <div class="stat"><div class="dot" style="background:#ffedd5">📌</div><div><b id="statOther">0</b><small>其他状态</small></div></div>
+    </div>
+
+    <div class="toolbar">
+      <input id="searchBox" placeholder="搜索：姓名 / 学校 / 专业 / 院系">
+      <button class="btn btn-ghost btn-sm" id="exportCsv">导出 CSV</button>
+      <button class="btn btn-ghost btn-sm" id="exportJson">备份 JSON</button>
+      <button class="btn btn-ghost btn-sm" id="importJson">导入 JSON</button>
+      <button class="btn btn-danger-ghost btn-sm" id="clearAll">清空数据</button>
+      <input type="file" id="importFile" accept=".json" hidden>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>姓名</th><th>性别</th><th>学校</th><th>层次</th><th>专业</th>
+            <th>学历类别</th><th>学籍状态</th><th>入学日期</th><th style="width:200px">操作</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+      <div class="empty" id="emptyTip" style="display:none">暂无记录，请到「信息采集」页提交</div>
+    </div>
+  </section>
+</main>
+
+<footer>数据仅保存在本机浏览器（IndexedDB），不会上传任何服务器 · 建议定期「备份 JSON」</footer>
+
+<!-- 详情弹窗 -->
+<div class="modal-mask" id="modalMask">
+  <div class="modal">
+    <div class="modal-head" id="modalHead"></div>
+    <div class="detail-grid" id="modalBody"></div>
+    <div style="padding:0 24px 22px;display:flex;justify-content:flex-end;gap:10px;">
+      <button class="btn btn-ghost btn-sm" id="makeCardBtn">生成学籍卡（虚构演示）</button>
+    </div>
+  </div>
 </div>
+
+<div id="toast"></div>
+
 <script>
-(function(){try{var k='yg_visits';var n=+(localStorage.getItem(k)||0)+1;localStorage.setItem(k,n);document.getElementById('cnt').textContent=n.toLocaleString();}catch(e){}})();
+/* ================= 数据 ================= */
+const OPTS = {
+  ethnicity: ['汉族','蒙古族','回族','藏族','维吾尔族','苗族','彝族','壮族','布依族','朝鲜族','满族','侗族','瑶族','白族','土家族','哈尼族','哈萨克族','傣族','黎族','傈僳族','佤族','畲族','高山族','拉祜族','水族','东乡族','纳西族','景颇族','柯尔克孜族','土族','达斡尔族','仫佬族','羌族','布朗族','撒拉族','毛南族','仡佬族','锡伯族','阿昌族','普米族','塔吉克族','怒族','乌孜别克族','俄罗斯族','鄂温克族','德昂族','保安族','裕固族','京族','塔塔尔族','独龙族','鄂伦春族','赫哲族','门巴族','珞巴族','基诺族','其他'],
+  level: ['专科（高职）','本科','硕士研究生','博士研究生','第二学士学位'],
+  eduType: ['普通高等教育','成人高等教育','高等教育自学考试','网络教育','开放教育','其他'],
+  studyMode: ['全日制','非全日制'],
+  status: ['在籍','休学','保留入学资格','退学','毕业','结业','肄业']
+};
+const REQUIRED = ['name','gender','birth','ethnicity','school','level','major','duration','eduType','studyMode','enrollDate','status'];
+const CSV_COLS = [
+  ['姓名','name'],['性别','gender'],['出生日期','birth'],['民族','ethnicity'],
+  ['学校名称','school'],['层次','level'],['专业','major'],['学制','duration'],
+  ['学历类别','eduType'],['学习形式','studyMode'],['分院系所','department'],
+  ['入学日期','enrollDate'],['学籍状态','status'],['离校日期','leaveDate']
+];
+
+let db = null, records = [], editId = null, photoData = null;
+const $ = s => document.querySelector(s);
+
+/* ================= IndexedDB ================= */
+function openDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open('xuejiDB', 1);
+    req.onupgradeneeded = e => e.target.result.createObjectStore('records', { keyPath: 'id', autoIncrement: true });
+    req.onsuccess = e => { db = e.target.result; res(); };
+    req.onerror = () => rej(req.error);
+  });
+}
+const store = mode => db.transaction('records', mode).objectStore('records');
+const dbAll    = () => new Promise((res, rej) => { const r = store('readonly').getAll();  r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const dbPut    = rec => new Promise((res, rej) => { const r = store('readwrite').put(rec); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); });
+const dbDel    = id  => new Promise((res, rej) => { const r = store('readwrite').delete(id); r.onsuccess = () => res(); r.onerror = () => rej(r.error); });
+const dbClear  = ()  => new Promise((res, rej) => { const r = store('readwrite').clear(); r.onsuccess = () => res(); r.onerror = () => rej(r.error); });
+
+/* ================= 工具 ================= */
+const esc = s => String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+let toastTimer;
+function toast(msg, type = 'ok') {
+  const t = $('#toast');
+  t.textContent = msg; t.className = type; t.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove('show'), 2200);
+}
+function download(content, type, name) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([content], { type }));
+  a.download = name; a.click();
+  URL.revokeObjectURL(a.href);
+}
+const today = () => new Date().toISOString().slice(0, 10);
+const badgeCls = s => ({ '在籍':'b-green','毕业':'b-blue','休学':'b-orange','保留入学资格':'b-orange','退学':'b-red','结业':'b-purple','肄业':'b-gray' }[s] || 'b-gray');
+
+/* ================= 照片压缩 ================= */
+function fileToThumb(file) {
+  return new Promise((res, rej) => {
+    if (!file.type.startsWith('image/')) return rej();
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => {
+      const max = 300, s = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * s); c.height = Math.round(img.height * s);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      res(c.toDataURL('image/jpeg', .85));
+    };
+    img.onerror = rej;
+    img.src = url;
+  });
+}
+function setPhoto(data) {
+  photoData = data;
+  const box = $('#photoBox'), img = $('#photoPreview');
+  if (data) { img.src = data; box.classList.add('has-photo'); }
+  else { img.removeAttribute('src'); box.classList.remove('has-photo'); }
+}
+
+/* ================= 表单 ================= */
+function fillSelect(id, arr, ph) {
+  document.getElementById(id).innerHTML =
+    `<option value="">${ph}</option>` + arr.map(v => `<option value="${v}">${v}</option>`).join('');
+}
+const val = id => document.getElementById(id).value.trim();
+
+function collectForm() {
+  return {
+    name: val('name'), gender: val('gender'), birth: val('birth'), ethnicity: val('ethnicity'),
+    school: val('school'), level: val('level'), major: val('major'), duration: val('duration'),
+    eduType: val('eduType'), studyMode: val('studyMode'), department: val('department'),
+    enrollDate: val('enrollDate'), status: val('status'), leaveDate: val('leaveDate'),
+    photo: photoData, createdAt: new Date().toISOString()
+  };
+}
+function validate(rec) {
+  document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
+  let first = null;
+  REQUIRED.forEach(k => {
+    if (!rec[k]) {
+      const el = document.getElementById(k);
+      el.classList.add('invalid');
+      if (!first) first = el;
+    }
+  });
+  if (first) { first.focus(); toast('请填写所有带 * 的必填项', 'err'); return false; }
+  return true;
+}
+function resetForm() {
+  $('#recordForm').reset();
+  document.querySelectorAll('.invalid').forEach(el => el.classList.remove('invalid'));
+  setPhoto(null);
+  editId = null;
+  $('#submitBtn').textContent = '保存记录';
+  $('#cancelEdit').style.display = 'none';
+}
+function loadToForm(rec) {
+  ['name','gender','birth','ethnicity','school','level','major','duration','eduType','studyMode','department','enrollDate','status','leaveDate']
+    .forEach(k => document.getElementById(k).value = rec[k] ?? '');
+  setPhoto(rec.photo || null);
+  editId = rec.id;
+  $('#submitBtn').textContent = '更新记录';
+  $('#cancelEdit').style.display = '';
+  switchTab('collect');
+}
+
+/* ================= 记录列表 ================= */
+async function loadRecords() {
+  records = await dbAll();
+  records.sort((a, b) => b.id - a.id);
+  renderTable();
+}
+function renderTable() {
+  const kw = $('#searchBox').value.trim().toLowerCase();
+  const list = kw ? records.filter(r =>
+    [r.name, r.school, r.major, r.department].some(v => String(v || '').toLowerCase().includes(kw))
+  ) : records;
+
+  const tb = $('#tbody');
+  $('#emptyTip').style.display = list.length ? 'none' : 'block';
+  tb.innerHTML = list.map(r => `
+    <tr>
+      <td><div class="name-cell">
+        <div class="avatar-sm">${r.photo ? `<img src="${r.photo}" alt="">` : esc((r.name || '?')[0])}</div>
+        ${esc(r.name)}
+      </div></td>
+      <td>${esc(r.gender)}</td>
+      <td>${esc(r.school)}</td>
+      <td>${esc(r.level)}</td>
+      <td>${esc(r.major)}</td>
+      <td>${esc(r.eduType)}</td>
+      <td><span class="badge ${badgeCls(r.status)}">${esc(r.status)}</span></td>
+      <td>${esc(r.enrollDate)}</td>
+      <td><div class="ops">
+        <button class="btn btn-primary btn-sm" onclick="openCard(${r.id})">学籍卡</button>
+        <button class="btn btn-ghost btn-sm" onclick="openDetail(${r.id})">查看</button>
+        <button class="btn btn-ghost btn-sm" onclick="editRecord(${r.id})">编辑</button>
+        <button class="btn btn-danger-ghost btn-sm" onclick="delRecord(${r.id})">删除</button>
+      </div></td>
+    </tr>`).join('');
+
+  $('#statTotal').textContent = records.length;
+  $('#statActive').textContent = records.filter(r => r.status === '在籍').length;
+  $('#statGrad').textContent = records.filter(r => r.status === '毕业').length;
+  $('#statOther').textContent = records.filter(r => !['在籍','毕业'].includes(r.status)).length;
+}
+function findRec(id) { return records.find(r => r.id === id); }
+
+async function delRecord(id) {
+  const r = findRec(id);
+  if (!r) return;
+  if (!confirm(`确定删除「${r.name}」的记录？删除后不可恢复。`)) return;
+  await dbDel(id);
+  await loadRecords();
+  toast('记录已删除');
+}
+function editRecord(id) {
+  const r = findRec(id);
+  if (r) { loadToForm(r); toast('已载入编辑，修改后点击「更新记录」'); }
+}
+
+/* ================= 详情弹窗 ================= */
+let currentDetailId = null;
+function openDetail(id) {
+  const r = findRec(id);
+  if (!r) return;
+  currentDetailId = id;
+  $('#modalHead').innerHTML = `
+    <div class="avatar-lg">${r.photo ? `<img src="${r.photo}" alt="">` : esc((r.name || '?')[0])}</div>
+    <div><h3>${esc(r.name)}</h3><p>${esc(r.school)} · ${esc(r.major)}</p></div>
+    <button class="modal-close" onclick="closeModal()">×</button>`;
+  const rows = [
+    ['性别', r.gender], ['出生日期', r.birth], ['民族', r.ethnicity], ['学校名称', r.school],
+    ['层次', r.level], ['专业', r.major], ['学制', r.duration], ['学历类别', r.eduType],
+    ['学习形式', r.studyMode], ['分院系所', r.department || '—'],
+    ['入学日期', r.enrollDate], ['学籍状态', `<span class="badge ${badgeCls(r.status)}">${esc(r.status)}</span>`],
+    ['离校日期', r.leaveDate || '—']
+  ];
+  $('#modalBody').innerHTML = rows.map(([k, v]) =>
+    `<div class="detail-item"><small>${k}</small><b>${v}</b></div>`).join('');
+  $('#modalMask').classList.add('show');
+}
+const closeModal = () => $('#modalMask').classList.remove('show');
+
+/* ================= 导入导出 ================= */
+function exportCsv() {
+  if (!records.length) return toast('暂无数据可导出', 'err');
+  const rows = [CSV_COLS.map(c => c[0])].concat(
+    records.map(r => CSV_COLS.map(([, k]) => r[k] ?? ''))
+  );
+  const csv = '\ufeff' + rows.map(row => row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\r\n');
+  download(csv, 'text/csv;charset=utf-8', `学籍信息_${today()}.csv`);
+  toast(`已导出 ${records.length} 条记录（CSV 不含照片）`);
+}
+function exportJson() {
+  if (!records.length) return toast('暂无数据可备份', 'err');
+  download(JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), records }, null, 2),
+    'application/json', `学籍信息备份_${today()}.json`);
+  toast(`已备份 ${records.length} 条记录（含照片）`);
+}
+async function importJson(file) {
+  try {
+    const data = JSON.parse(await file.text());
+    const recs = Array.isArray(data) ? data : data.records;
+    if (!Array.isArray(recs) || !recs.length) throw 0;
+    let n = 0;
+    for (const r of recs) {
+      if (!r || !r.name) continue;
+      const { id, ...clean } = r;
+      await dbPut(clean); n++;
+    }
+    await loadRecords();
+    toast(`成功导入 ${n} 条记录`);
+  } catch { toast('导入失败：文件格式不正确', 'err'); }
+}
+
+/* ================= Tab 切换 ================= */
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'panel-' + name));
+}
+
+/* ================= 事件绑定 ================= */
+document.querySelectorAll('.tab').forEach(b => b.onclick = () => switchTab(b.dataset.tab));
+$('#modalMask').addEventListener('click', e => { if (e.target === e.currentTarget) closeModal(); });
+
+$('#recordForm').addEventListener('submit', async e => {
+  e.preventDefault();
+  const rec = collectForm();
+  if (!validate(rec)) return;
+  if (editId != null) rec.id = editId;
+  await dbPut(rec);
+  const isEdit = editId != null;
+  resetForm();
+  await loadRecords();
+  toast(isEdit ? '记录已更新' : `已保存「${rec.name}」的信息`);
+  switchTab('manage');
+});
+$('#formReset').onclick = () => { resetForm(); toast('表单已重置'); };
+$('#cancelEdit').onclick = resetForm;
+
+$('#photoInput').addEventListener('change', async e => {
+  const f = e.target.files[0];
+  e.target.value = '';
+  if (!f) return;
+  try { setPhoto(await fileToThumb(f)); toast('照片已就绪'); }
+  catch { toast('仅支持图片文件', 'err'); }
+});
+$('#photoRemove').onclick = () => setPhoto(null);
+
+$('#searchBox').addEventListener('input', renderTable);
+
+/* 将当前记录传给本地演示页，不修改任何官方数据。 */
+function openCard(id) {
+  const r = findRec(id);
+  if (!r) return;
+  try { localStorage.setItem('xuejiCardDemo', JSON.stringify(r)); } catch (e) { /* file:// 下可能受限，走 hash */ }
+  window.open('靶机网.html#d=' + encodeURIComponent(JSON.stringify(r)), '_blank', 'noopener');
+}
+$('#makeCardBtn').onclick = () => openCard(currentDetailId);
+$('#exportCsv').onclick = exportCsv;
+$('#exportJson').onclick = exportJson;
+$('#importJson').onclick = () => $('#importFile').click();
+$('#importFile').addEventListener('change', e => { const f = e.target.files[0]; e.target.value = ''; if (f) importJson(f); });
+$('#clearAll').onclick = async () => {
+  if (!records.length) return toast('暂无数据', 'err');
+  if (!confirm(`将清空全部 ${records.length} 条记录，确定？`)) return;
+  if (!confirm('再次确认：真的要清空所有数据吗？')) return;
+  await dbClear();
+  await loadRecords();
+  toast('已清空全部数据');
+};
+
+/* ================= 初始化 ================= */
+(async () => {
+  fillSelect('ethnicity', OPTS.ethnicity, '请选择民族');
+  fillSelect('level', OPTS.level, '请选择层次');
+  fillSelect('eduType', OPTS.eduType, '请选择学历类别');
+  fillSelect('studyMode', OPTS.studyMode, '请选择学习形式');
+  fillSelect('status', OPTS.status, '请选择学籍状态');
+  await openDB();
+  await loadRecords();
+})();
 </script>
 </body>
 </html>
