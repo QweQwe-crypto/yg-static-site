@@ -22,6 +22,11 @@
   .tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:10px;background:#eef2f7;color:#5b6673;margin-left:4px}
   .tag.xff{background:#fff1e0;color:#b35c00}
   .tag.cdn{background:#e8f4ea;color:#1e7a34}
+  .tag.leak{background:#f3e8ff;color:#6d28d9}
+  .tag.home{background:#e8f4ea;color:#1e7a34}
+  .tag.dc{background:#fee2e2;color:#b91c1c}
+  .tag.proxy{background:#fff1e0;color:#b35c00}
+  .sub{font-size:11px;color:#8a9099;margin-top:2px}
   .chain{font-family:ui-monospace,Consolas,monospace;font-size:12px;color:#5b6673}
   .real{font-weight:700;color:#b3261e}
   .row{cursor:pointer}
@@ -51,11 +56,12 @@
       <th style="width:165px">时间</th>
       <th style="width:185px">真实IP</th>
       <th style="width:130px">来源</th>
+      <th style="width:250px">代理后真实IP / 判定</th>
       <th style="width:210px">XFF 链路(左=最远)</th>
       <th style="width:200px">路径</th>
       <th>UA / Referer</th>
     </tr></thead>
-    <tbody id="tb"><tr><td colspan="6" class="muted">加载中…</td></tr></tbody>
+    <tbody id="tb"><tr><td colspan="7" class="muted">加载中…</td></tr></tbody>
   </table>
 </div>
 <script>
@@ -118,7 +124,7 @@
     try{
       if (!RESOLVED) await resolveBase();
       if (!RESOLVED) {
-        $('tb').innerHTML = '<tr><td colspan="6" class="muted">连不上后端 API。已尝试：' +
+        $('tb').innerHTML = '<tr><td colspan="7" class="muted">连不上后端 API。已尝试：' +
           (($('srv').value||'').trim() || location.origin) + ' / ' + FALLBACK_BACKENDS.join(' / ') +
           '。请确认 Web Service 已启动（Render 免费实例休眠时需先唤醒），或在「服务地址」手动填写。</td></tr>';
         return;
@@ -128,9 +134,12 @@
       if(r.status === 404) r = await fetch(BASE() + '/api/logs?token=' + encodeURIComponent(TOKEN()));
       const j = await r.json();
       const d = Array.isArray(j) ? j : (Array.isArray(j.logs) ? j.logs : null);
-      if(!d){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">' + esc((j && (j.message||j.error)) || ('HTTP ' + r.status)) + '</td></tr>'; return; }
+      if(!d){ $('tb').innerHTML = '<tr><td colspan="7" class="muted">' + esc((j && (j.message||j.error)) || ('HTTP ' + r.status)) + '</td></tr>'; return; }
+      // 并行拉取：WebRTC 泄漏的「代理后真实IP」+ 每个 IP 的归属判定
+      const leakMap = await fetchLeaks();
+      const geoMap  = await fetchGeo(d);
       $('sum').textContent = '共 ' + d.length + ' 条（最新在前）';
-      if(!d.length){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>'; return; }
+      if(!d.length){ $('tb').innerHTML = '<tr><td colspan="7" class="muted">暂无记录</td></tr>'; return; }
       let html = '';
       d.forEach((x,i)=>{
         const chain = (x.xffChain && x.xffChain.length) ? x.xffChain : [];
@@ -140,18 +149,32 @@
         const srcTag = /CDN头/.test(x.ipSource||'') ? '<span class="tag cdn">CDN头</span>'
           : /XFF/.test(x.ipSource||'') ? '<span class="tag xff">XFF</span>'
           : '<span class="tag">直连</span>';
+        const g = geoMap[x.ip] || {};
+        const leak = x.sid ? leakMap[x.sid] : null;
+        let realCell = '';
+        if (leak && leak.ip && leak.ip !== x.ip) {
+          realCell = '<span class="tag leak">WebRTC泄漏</span> <span class="real">' + esc(leak.ip) + '</span>';
+        } else if (g.type) {
+          realCell = '<span class="tag ' + (g.type==='住宅宽带'?'home':(g.hosting?'dc':'proxy')) + '">' + esc(g.type) + '</span>';
+        } else if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc00:|fd00:)/i.test(x.ip||'')) {
+          realCell = '<span class="tag">内网/本机</span>';
+        } else {
+          realCell = '<span class="muted">查询中…</span>';
+        }
+        const geoSub = (g.isp || g.asnOrg) ? '<div class="sub">' + esc(g.asnOrg||g.isp) + (g.country?' · '+esc(g.country):'') + '</div>' : '';
         html += '<tr class="row" onclick="toggle('+i+')">'
           + '<td>' + esc(fmt(x.time)) + '</td>'
           + '<td><span class="real">' + esc(x.ip||'-') + '</span>' + srcTag + '</td>'
           + '<td>' + esc(x.client||'-') + '</td>'
+          + '<td>' + realCell + geoSub + '</td>'
           + '<td class="chain">' + chainHtml + '</td>'
           + '<td>' + esc(x.path||'-') + '</td>'
           + '<td class="muted">' + esc(x.ua||'-') + (x.referer? '<br>ref: '+esc(x.referer) : '') + '</td>'
           + '</tr>';
-        html += '<tr class="detail" id="d'+i+'" style="display:'+(OPEN[i]?'table-row':'none')+'"><td colspan="6"><pre>' + esc(detail(x)) + '</pre></td></tr>';
+        html += '<tr class="detail" id="d'+i+'" style="display:'+(OPEN[i]?'table-row':'none')+'"><td colspan="7"><pre>' + esc(detail(Object.assign({}, x, { leakIp: (x.sid && leakMap[x.sid]) ? leakMap[x.sid].ip : '', geoType: g.type||'', geoOrg: g.asnOrg||g.isp||'', geoCountry: g.country||'' }))) + '</pre></td></tr>';
       });
       $('tb').innerHTML = html;
-    }catch(e){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">请求失败：' + esc(e.message || '无法连接服务，请检查"服务地址"是否填对（形如 http://127.0.0.1:8099）') + '</td></tr>'; }
+    }catch(e){ $('tb').innerHTML = '<tr><td colspan="7" class="muted">请求失败：' + esc(e.message || '无法连接服务，请检查"服务地址"是否填对（形如 http://127.0.0.1:8099）') + '</td></tr>'; }
   }
 
   function detail(x){
@@ -168,11 +191,41 @@
     lines.push('TCP 直连IP  : ' + (x.socketIp || '-') + '   (通常是 CDN/反代节点)');
     lines.push('直连来源可信: ' + (x.trustedProxy ? '是 (在可信代理名单内, 已采信其头部)' : '否 (不在名单内, XFF/CF 头已忽略)'));
     if(x.cdnIp) lines.push('CDN 单值头  : ' + x.cdnIp);
+    lines.push('代理透传头  : ' + (x.proxyHints && Object.keys(x.proxyHints).length ? JSON.stringify(x.proxyHints) : '（无）'));
+    if(x.leakIp) lines.push('代理后真实IP: ' + x.leakIp + '   <= WebRTC 泄漏探测结果');
+    if(x.geoType) lines.push('IP 归属判定 : ' + x.geoType + '  ' + (x.geoOrg||'') + '  ' + (x.geoCountry||''));
     lines.push('请求        : ' + (x.method||'') + ' ' + (x.path||''));
     lines.push('来源页      : ' + (x.referer||'-'));
     lines.push('浏览器/系统 : ' + (x.client||'-'));
     lines.push('User-Agent  : ' + (x.ua||'-'));
     return lines.join('\n');
+  }
+
+  // 取所有 sid 的 WebRTC 泄漏结果
+  async function fetchLeaks(){
+    try{
+      const r = await fetch(BASE() + '/api/leaks?token=' + encodeURIComponent(TOKEN()), {cache:'no-store'});
+      if(!r.ok) return {};
+      const j = await r.json();
+      return (j && typeof j==='object') ? j : {};
+    }catch(e){ return {}; }
+  }
+
+  // 批量查询 IP 归属（住宅宽带 / 机房代理）
+  async function fetchGeo(rows){
+    const out = {};
+    const ips = Array.from(new Set(rows.map(r=>r.ip).filter(Boolean)))
+      .filter(ip => !/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc00:|fd00:|fe80:)/i.test(ip))
+      .slice(0,60);
+    await Promise.all(ips.map(async ip=>{
+      try{
+        const r = await fetch(BASE() + '/api/geo?ip=' + encodeURIComponent(ip), {cache:'no-store'});
+        if(!r.ok) return;
+        const j = await r.json();
+        if(j && !j.error) out[ip] = j;
+      }catch(e){}
+    }));
+    return out;
   }
 
   function toggle(i){

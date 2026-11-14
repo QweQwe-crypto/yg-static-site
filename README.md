@@ -117,3 +117,48 @@ node server.js
 ```
 
 双击本地 html 文件（file://）时，在「服务地址」里填 `http://127.0.0.1:8099`。
+
+## 代理后面的真实 IP 追踪（新增）
+
+### 为什么需要
+当访客通过 HTTP/SOCKS 代理访问时，CDN/反代只能看到代理出口 IP（XFF 最左段变成代理节点），
+日志里看到的是「代理 IP」，不是访客本人。判定这类访问有两种手段：
+
+| 手段 | 原理 | 能拿到什么 | 局限 |
+|---|---|---|---|
+| **WebRTC 泄漏探针**（已内置） | 页面注入脚本，用 STUN 建 ICE 候选，浏览器上报本机出口候选 IP | 代理后面的真实公网 IP（IPv4/IPv6） | 现代浏览器 WebRTC 已限制 mDNS 候选，可能拿到不到 IPv4 |
+| **IP 归属判定**（已内置） | 查询 ASN / ISP / connection.type | 该 IP 是「住宅宽带」还是「机房/IDC」 | 只能定性，不能还原到人 |
+
+> 注意：Cloudflare 的 `CF-Connecting-IP` 拿到的就是访客直接连接 CF 边缘时的 IP。
+> 访客若使用代理软件，CF 看到的是代理节点 IP，此时 CF 头本身也是代理 IP，
+> 所以**服务端层面无法凭 HTTP 头还原代理后的真实 IP**，必须靠浏览器侧探针（WebRTC）由访客自己上报。
+
+### 新增接口
+
+| 接口 | 方法 | 说明 |
+|---|---|---|
+| `/api/session` | GET | 发放会话 sid |
+| `/api/leak` | POST | 接收浏览器上报的 WebRTC 泄漏 IP（body: `{sid, ip, type}`） |
+| `/api/leak?sid=` | GET | 查询某 sid 的泄漏 IP |
+| `/api/leaks?token=` | GET | 批量取全部 sid 的泄漏 IP（需 token） |
+| `/api/geo?ip=` | GET | IP 归属 / 住宅-机房判定（需自备 IPQS_KEY 可增强代理识别） |
+
+### 工作流程
+1. 服务端为每次 HTML 页面访问分配 `sid`，并把 `window.__SID__` 注入页面
+2. 注入的 `__iplog_leak__` 脚本用 STUN 收集 ICE 候选，POST 到 `/api/leak`
+3. 日志条目携带 `sid`，前端按 sid 关联泄漏结果，在「代理后真实IP / 判定」列显示：
+   - `WebRTC泄漏` + 真实 IP（与代理出口不同）
+   - 或 IP 归属标签：`住宅宽带` / `机房/IDC` / `代理/代理池` / `VPN 出口`
+4. 归属查询走 `ipwho.is`（免费）+ `ipinfo.io`（兜底），结果缓存 6 小时
+   设置 `IPQS_KEY` 环境变量可启用 IPQualityScore，额外返回 proxy/hosting/vpn/tor/fraud_score
+
+### 环境变量（新增）
+| 变量 | 说明 |
+|---|---|
+| `IPQS_KEY` | 可选，ipqualityscore.com API key，用于更准的代理/机房识别与欺诈分 |
+
+### 判定优先级
+`server.js` 中 `parseIp()` 仍是三层：
+1. 直连来源不在可信名单 → 全部 XFF/CF 头视为伪造，只用 socket 地址
+2. 可信来源 → 优先取 CDN 单值头（`cf-connecting-ip` / `true-client-ip` / `x-real-ip` ...）
+3. 无单值头 → XFF 链自右向左剥离可信代理节点，剥到第一个不可信 IP

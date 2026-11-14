@@ -44,6 +44,163 @@ function loadTrustedProxy() {
 }
 const TRUSTED_PROXY = loadTrustedProxy();
 
+// ============================================================
+// 代理 / 真实 IP 增强模块
+//  1) 读取代理透传头（代理软件有时会带出原始 IP，但可被伪造，仅作线索）
+//  2) WebRTC / DNS 泄漏探针：浏览器侧泄露出的真实出口 IP -> /api/leak
+//  3) 出口 IP 归属查询：判定该 IP 是「住宅宽带」还是「机房/代理池」
+// ============================================================
+
+const SID_STORE = new Map();   // sid -> 发放时间
+const LEAK_STORE = new Map();  // sid -> { ip, ts, type }
+const GEO_CACHE = new Map();   // ip -> { ts, data }
+
+const PROXY_HINT_HEADERS = [
+  'x-client-ip', 'x-originating-ip', 'x-original-forwarded-for', 'x-cluster-client-ip',
+  'client-ip', 'proxy-client-ip', 'http_client_ip', 'http_x_forwarded_for',
+  'forwarded', 'x-real-ip', 'true-client-ip', 'x-forwarded-host', 'x-remote-addr',
+  'x-forwarded-server', 'via'
+];
+
+function isPrivateIp(ip) {
+  ip = String(ip || '').replace(/^::ffff:/, '');
+  return /^127\./.test(ip) || /^10\./.test(ip) || /^192\.168\./.test(ip)
+    || /^172\.(1[6-9]|2\d|3[01])\./.test(ip) || /^169\.254\./.test(ip)
+    || /^::1$/.test(ip) || /^fc00:/i.test(ip) || /^fd00:/i.test(ip) || /^fe80:/i.test(ip)
+    || ip === '';
+}
+
+// 收集代理软件可能透传的头（这些头客户端可伪造，仅作线索展示）
+function proxyHints(headers) {
+  const out = {};
+  for (const h of PROXY_HINT_HEADERS) {
+    const v = headers[h];
+    if (v) out[h] = String(v).slice(0, 160);
+  }
+  return out;
+}
+
+// 常见 IDC / 云厂商 / 代理服务商 ASN 关键字（ipwho.is 对部分云厂商 connection.type 判定不准，用 ASN 兜底）
+const IDC_KEYWORDS = [
+  'tencent', 'tencentcloud', 'qcloud', 'aliyun', 'alibaba', 'alicloud', 'huawei cloud',
+  'huaweicloud', 'amazon', 'aws', 'microsoft', 'azure', 'google', 'gcp', 'digitalocean',
+  'linode', 'akamai', 'cloudflare', 'vultr', 'hetzner', 'ovh', 'contabo', 'oracle',
+  'scaleway', 'leaseweb', 'm247', 'choopa', 'hosting', 'datacenter', 'data center',
+  'colocation', 'cloud', 'proxy', 'vpn', 'bulletproof'
+];
+function looksLikeIDC(org, isp, connType) {
+  const hay = String(org || '') + ' ' + String(isp || '') + ' ' + String(connType || '').toLowerCase();
+  const h = hay.toLowerCase();
+  if (connType === 'hosting' || connType === 'business' && /cloud|data|hosting|dedicated/i.test(h)) return true;
+  return IDC_KEYWORDS.some(k => h.includes(k));
+}
+
+function httpGetJson(url, timeoutMs) {
+  return new Promise(resolve => {
+    const mod = url.startsWith('https') ? https : http;
+    let done = false;
+    const fin = v => { if (!done) { done = true; resolve(v); } };
+    let rq;
+    try {
+      rq = mod.get(url, { timeout: timeoutMs, headers: { 'user-agent': 'ip-log/1.0', accept: 'application/json' } }, r => {
+        if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) { rq.destroy(); return fin(null); }
+        let b = '';
+        r.on('data', c => { if (b.length < 200000) b += c; });
+        r.on('end', () => { try { fin(JSON.parse(b)); } catch (e) { fin(null); } });
+      });
+    } catch (e) { return fin(null); }
+    rq.on('error', () => fin(null));
+    rq.on('timeout', () => { try { rq.destroy(); } catch (e) {} fin(null); });
+  });
+}
+
+// 出口 IP 归属 / 是否机房代理
+async function lookupIp(ip) {
+  if (!ip || isPrivateIp(ip)) return null;
+  const hit = GEO_CACHE.get(ip);
+  if (hit && Date.now() - hit.ts < 6 * 3600 * 1000) return hit.data;
+
+  let data = null;
+  // 1) 商业代理检测库（可选，环境变量配置）
+  if (process.env.IPQS_KEY) {
+    const j = await httpGetJson('https://ipqualityscore.com/api/json/ip/' + process.env.IPQS_KEY + '/' + encodeURIComponent(ip), 5000);
+    if (j && j.success) {
+      data = {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: j.isp || '', asn: j.ASN ? ('AS' + j.ASN) : '', asnOrg: j.organization || '',
+        proxy: !!j.proxy, hosting: !!j.hosting, vpn: !!j.vpn, tor: !!j.tor,
+        fraudScore: typeof j.fraud_score === 'number' ? j.fraud_score : null,
+        source: 'ipqualityscore'
+      };
+    }
+  }
+  // 2) ipwho.is（免费，支持 connection.type=hosting 判定）
+  if (!data) {
+    const j = await httpGetJson('https://ipwho.is/' + encodeURIComponent(ip), 4000);
+    if (j && j.success !== false && j.connection) {
+      const c = j.connection;
+      data = {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: c.isp || '', asn: c.asn ? ('AS' + c.asn) : '', asnOrg: c.org || '',
+        proxy: false, hosting: c.type === 'hosting', vpn: false, tor: false,
+        connType: c.type || '', fraudScore: null, source: 'ipwho.is'
+      };
+    }
+  }
+  // 3) ipinfo.io（兜底）
+  if (!data) {
+    const j = await httpGetJson('https://ipinfo.io/' + encodeURIComponent(ip) + '/json', 4000);
+    if (j && j.ip) {
+      const m = String(j.org || '').match(/AS(\d+)/);
+      data = {
+        country: j.country || '', region: j.region || '', city: j.city || '',
+        isp: j.org || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
+        proxy: false, hosting: false, vpn: false, tor: false, fraudScore: null,
+        source: 'ipinfo.io'
+      };
+    }
+  }
+  if (!data) return null;
+  if (looksLikeIDC(data.asnOrg, data.isp, data.connType)) { data.hosting = true; }
+  data.type = data.hosting ? '机房/IDC' : (data.proxy ? '代理/代理池' : (data.vpn ? 'VPN 出口' : '住宅宽带'));
+  GEO_CACHE.set(ip, { ts: Date.now(), data });
+  return data;
+}
+
+// ---------- 浏览器侧泄漏探针（WebRTC 拿到代理后面的真实出口 IP） ----------
+const LEAK_JS = [
+'<script id="__iplog_leak__">',
+'(function(){',
+'  var sid = window.__SID__ || "";',
+'  if (!sid) return;',
+'  var done = false;',
+'  function post(ip, type){ if(done||!ip) return; done=true;',
+'    try{ fetch("/api/leak",{method:"POST",headers:{"Content-Type":"application/json"},',
+'      body:JSON.stringify({sid:sid,ip:ip,type:type}),keepalive:true}); }catch(e){} }',
+'  try{',
+'    var pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.cloudflare.com:3478"},{urls:"stun:stun.l.google.com:19302"}]});',
+'    pc.createDataChannel("x");',
+'    pc.onicecandidate = function(e){',
+'      if(!e || !e.candidate) return;',
+'      var s = e.candidate.candidate || "";',
+'      var m = s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);',
+'      if(m){ post(m[1], "webrtc-ipv4"); return; }',
+'      var m6 = s.match(/((?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4})/i);',
+'      if(m6 && !/^(fe80|::)/i.test(m6[1])) post(m6[1], "webrtc-ipv6");',
+'    };',
+'    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){});',
+'  }catch(e){}',
+'})();',
+'</script>'
+].join('\n');
+
+function pruneStores() {
+  const now = Date.now();
+  for (const [k, v] of SID_STORE) if (now - v > 3600e3) SID_STORE.delete(k);
+  for (const [k, v] of LEAK_STORE) if (now - v.ts > 86400e3) LEAK_STORE.delete(k);
+}
+setInterval(pruneStores, 10 * 60e3).unref();
+
 const PRIVATE_RANGES = [
   /^127\./, /^10\./, /^192\.168\./, /^172\.(1[6-9]|2\d|3[01])\./,
   /^::1$/, /^fc00:/i, /^fd00:/i, /^fe80:/i
@@ -213,11 +370,19 @@ const MIME = {
 };
 
 // ---------- 服务器 ----------
-const server = http.createServer((req, res) => {
+const server = http.createServer(async (req, res) => {
   const ipInfo = parseIp(req);
   let u;
   try { u = new URL(req.url, 'http://localhost'); } catch (e) { u = new URL('/', 'http://localhost'); }
   const p = decodeURIComponent(u.pathname);
+
+  // 页面访问分配 sid（用于关联浏览器侧 WebRTC 泄漏探针）
+  const isPage = /\.(html?)$/i.test(p) || p === '/';
+  let pageSid = '';
+  if (isPage) {
+    pageSid = require('crypto').randomBytes(12).toString('hex');
+    SID_STORE.set(pageSid, Date.now());
+  }
 
   if (req.method === 'OPTIONS') {
     res.writeHead(204, CORS);
@@ -237,6 +402,54 @@ const server = http.createServer((req, res) => {
       trustPrivate: TRUST_PRIVATE,
       socket: ipInfo.socket
     });
+  }
+
+  // 发放会话 sid（前端带在后续请求上，用于关联泄漏探针结果）
+  if (p === '/api/session') {
+    const sid = (u.searchParams.get('sid') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64)
+      || require('crypto').randomBytes(12).toString('hex');
+    SID_STORE.set(sid, Date.now());
+    return json(res, 200, { sid, ok: true });
+  }
+
+  // 接收浏览器 WebRTC 泄漏探针上报的「代理后面」真实出口 IP
+  if (p === '/api/leak' && req.method === 'POST') {
+    let raw = '';
+    req.on('data', c => { if (raw.length < 4096) raw += c; });
+    req.on('end', () => {
+      let b = {};
+      try { b = JSON.parse(raw || '{}'); } catch (e) {}
+      const sid = String(b.sid || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+      const ip = String(b.ip || '').trim().slice(0, 64);
+      if (sid && ip && !isPrivateIp(ip)) {
+        LEAK_STORE.set(sid, { ip, ts: Date.now(), type: b.type || 'webrtc' });
+      }
+      return json(res, 200, { ok: true });
+    });
+    return;
+  }
+
+  // 查询某 sid 已上报的泄漏 IP
+  if (p === '/api/leak') {
+    const sid = (u.searchParams.get('sid') || '').replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64);
+    const rec = LEAK_STORE.get(sid);
+    return json(res, 200, rec ? { ip: rec.ip, ts: rec.ts, type: rec.type } : { ip: '', ts: 0, type: '' });
+  }
+
+  // 批量取所有 sid 的泄漏 IP（前端合并到表格行）
+  if (p === '/api/leaks') {
+    if (u.searchParams.get('token') !== ADMIN_TOKEN) return json(res, 403, { error: 'token 错误' });
+    const out = {};
+    for (const [k, v] of LEAK_STORE) out[k] = { ip: v.ip, ts: v.ts, type: v.type };
+    return json(res, 200, out);
+  }
+
+  // IP 归属 / 代理判定查询
+  if (p === '/api/geo') {
+    const ip = (u.searchParams.get('ip') || '').trim().slice(0, 64);
+    if (!ip) return json(res, 400, { error: '缺少 ip 参数' });
+    const d = await lookupIp(ip);
+    return json(res, 200, d || { error: '查询失败', ip });
   }
 
   if (p === '/api/logs' || p === '/api/visits') {
@@ -300,6 +513,8 @@ const server = http.createServer((req, res) => {
         socketIp: ipInfo.socket,
         trustedProxy: ipInfo.trustedProxy,
         cdnIp: ipInfo.cdnIp || '',
+        sid: pageSid || '',
+        proxyHints: proxyHints(req.headers),
         method: req.method,
         path: p + (u.search || ''),
         referer: req.headers.referer || '',
@@ -308,6 +523,11 @@ const server = http.createServer((req, res) => {
       }) + '\n');
     }
   } catch (e) {}
+
+  // 后台异步补全该 IP 的归属（住宅宽带 / 机房代理），供前端判定列使用
+  if (shouldLog && ipInfo.realIp && !isPrivateIp(ipInfo.realIp) && !GEO_CACHE.has(ipInfo.realIp)) {
+    lookupIp(ipInfo.realIp).catch(() => {});
+  }
 
   // 静态文件
   const rel = p === '/' ? '/index.html' : p;
@@ -324,6 +544,15 @@ const server = http.createServer((req, res) => {
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300'
     }, CORS));
+
+    // HTML 页面：注入 WebRTC 泄漏探针（拿到访客代理后面的真实出口 IP）
+    if (ext === '.html' && pageSid) {
+      let html = data.toString('utf8');
+      const inject = '<script>window.__SID__=' + JSON.stringify(pageSid) + ';</script>' + LEAK_JS;
+      if (html.includes('</body>')) html = html.replace('</body>', inject + '</body>');
+      else html += inject;
+      return res.end(Buffer.from(html, 'utf8'));
+    }
     res.end(data);
   });
 });
