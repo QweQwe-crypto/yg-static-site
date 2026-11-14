@@ -168,31 +168,7 @@ async function lookupIp(ip) {
 }
 
 // ---------- 浏览器侧泄漏探针（WebRTC 拿到代理后面的真实出口 IP） ----------
-const LEAK_JS = [
-'<script id="__iplog_leak__">',
-'(function(){',
-'  var sid = window.__SID__ || "";',
-'  if (!sid) return;',
-'  var done = false;',
-'  function post(ip, type){ if(done||!ip) return; done=true;',
-'    try{ fetch("/api/leak",{method:"POST",headers:{"Content-Type":"application/json"},',
-'      body:JSON.stringify({sid:sid,ip:ip,type:type}),keepalive:true}); }catch(e){} }',
-'  try{',
-'    var pc = new RTCPeerConnection({iceServers:[{urls:"stun:stun.cloudflare.com:3478"},{urls:"stun:stun.l.google.com:19302"}]});',
-'    pc.createDataChannel("x");',
-'    pc.onicecandidate = function(e){',
-'      if(!e || !e.candidate) return;',
-'      var s = e.candidate.candidate || "";',
-'      var m = s.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);',
-'      if(m){ post(m[1], "webrtc-ipv4"); return; }',
-'      var m6 = s.match(/((?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4})/i);',
-'      if(m6 && !/^(fe80|::)/i.test(m6[1])) post(m6[1], "webrtc-ipv6");',
-'    };',
-'    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){});',
-'  }catch(e){}',
-'})();',
-'</script>'
-].join('\n');
+const LEAK_JS = "<script id=\"__iplog_leak__\">\n(function(){\n  var sid = window.__SID__ || \"\";\n  if (!sid) return;\n  var done = false;\n  function post(ip, type){ if(done||!ip) return; done=true;\n    try{ fetch(\"/api/leak\",{method:\"POST\",headers:{\"Content-Type\":\"application/json\"},\n      body:JSON.stringify({sid:sid,ip:ip,type:type}),keepalive:true}); }catch(e){} }\n  function handle(cand){\n    if(!cand) return;\n    var m = String(cand).match(/(\\d{1,3}\\.\\d{1,3}\\.\\d{1,3}\\.\\d{1,3})/);\n    if(m){ post(m[1], \"webrtc-ipv4\"); return; }\n    var m6 = String(cand).match(/((?:[0-9a-f]{1,4}:){2,7}[0-9a-f]{1,4})/i);\n    if(m6 && !/^(fe80|::)/i.test(m6[1])) post(m6[1], \"webrtc-ipv6\");\n  }\n  try{\n    var pc = new RTCPeerConnection({iceServers:[{urls:\"stun:stun.cloudflare.com:3478\"},{urls:\"stun:stun.l.google.com:19302\"},{urls:\"stun:qq.com:3478\"}]});\n    pc.createDataChannel(\"x\");\n    pc.onicecandidate = function(e){ handle(e && e.candidate && e.candidate.candidate); };\n    pc.createOffer().then(function(o){ return pc.setLocalDescription(o); }).catch(function(){});\n  }catch(e){}\n  // 补充：STUN 拿不到时，用 fetch 到 STUN-over-HTTP 不可行，改用多源 STUN 重试\n})();\n</script>";
 
 function pruneStores() {
   const now = Date.now();
