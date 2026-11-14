@@ -55,12 +55,59 @@ PORT=8099 ADMIN_TOKEN='你的强密码' node server.js
 
 ## Render 部署
 
+**必须是 Web Service，不是 Static Site**（Static Site 不支持 Node 与 API 路由）。
+
 - Build Command：留空
 - Start Command：`node server.js`
 - Health Check Path：`/api/myip`
-- 环境变量：`ADMIN_TOKEN` 设为强密码，`TRUST_PRIVATE=1`
+- 环境变量：
+  - `ADMIN_TOKEN` = 你的强密码（Dashboard 里填）
+  - `TRUST_PRIVATE` = `1`（Render 内部负载均衡是内网地址，必须信任内网才能读到 XFF）
+  - `NODE_VERSION` = `22`
 
-Render 免费实例会休眠，冷启动可能几秒到几十秒。
+Render 会自动注入 `PORT`，代码已监听 `0.0.0.0`。
+免费实例会休眠，冷启动可能几秒到几十秒。
+
+### 两种部署形态
+
+**形态一（推荐）：同一个 Web Service 同时提供页面和 API**
+
+把本仓库设为 Render Web Service，Start Command 为 `node server.js`。
+此时：
+- 首页 `/` -> index.html
+- 日志页 `/jilu.html` -> 访问日志
+- `/靶机网.html` -> 靶机页
+- `/api/*` -> API
+
+前端同源相对路径请求，无需配置任何东西。
+
+**形态二：Static Site 提供页面 + 独立 Web Service 提供 API**
+
+如果页面已经在 Render Static Site 上，需要另开一个 Web Service 跑 `node server.js`，
+然后在 `jilu.html` 里把 `FALLBACK_BACKENDS` 的第一条改成那个 API 服务的域名：
+
+```js
+const FALLBACK_BACKENDS = [
+  'https://你的-api-服务.onrender.com',
+  ...
+];
+```
+
+前端会依次探测：手动填写的地址 -> 当前页同源 -> FALLBACK_BACKENDS 列表，
+第一个能访问 `/api/myip` 的即采用，探测结果自动回填到「服务地址」框。
+
+## 排查
+
+打开 `/api/headers` 可以看到本次收到的全部请求头与解析结果，用来确认每一层反代到底传了什么：
+
+```bash
+curl https://你的域名/api/headers
+curl -H "X-Forwarded-For: 6.6.6.6" https://你的域名/api/headers
+```
+
+- `parsed.source` 显示真实 IP 的判定来源
+- `parsed.trustedProxy` 表示直连来源是否在可信名单内
+- 若真实 IP 恒为 `127.0.0.1` 或内网地址 -> 可信名单没覆盖你的反代，或 TRUST_PRIVATE 设成了 0
 
 ## 本地调试
 

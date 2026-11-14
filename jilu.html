@@ -61,18 +61,68 @@
 <script>
   const $ = id => document.getElementById(id);
   const TOKEN = () => $('token').value.trim();
-  // 服务地址：同源打开时留空（走相对路径，最稳）；本地 file:// 打开时才需要填地址
-  const BASE = () => {
+  // ===== 服务地址解析 =====
+  // 后端 API 服务地址候选表（按顺序探测，第一个能连通 /api/myip 的即采用）
+  // 场景 A：API 与页面同一个 Node 服务 -> 同源，第一候选即命中
+  // 场景 B：页面在 Render Static Site，API 在另一个 Web Service -> 走第 2/3 候选
+  // 场景 C：本地 file:// 双击打开 -> 走本机端口候选
+  const FALLBACK_BACKENDS = [
+    'https://yg-static-site-v2.onrender.com',  // API 服务所在域名（与页面同源时也走这条）
+    'https://yg-ip-log.onrender.com',           // 若另开了独立 API 服务，改成它的域名
+    'http://127.0.0.1:8099',
+    'http://127.0.0.1:8080'
+  ];
+
+  let RESOLVED = '';    // 已探测成功的后端地址
+  let USER_TYPED = false; // 用户是否手动改过服务地址
+
+  function rawBase() {
     const v = ($('srv').value || '').trim().replace(/\/+$/, '');
     if (v) return v;
     return location.origin;
-  };
+  }
+  const BASE = () => RESOLVED || rawBase();
+
+  // 依次探测候选后端
+  async function resolveBase() {
+    const custom = ($('srv').value || '').trim().replace(/\/+$/, '');
+    const list = [];
+    if (custom) list.push(custom);
+    if (location.protocol !== 'file:') list.push(location.origin);
+    list.push.apply(list, FALLBACK_BACKENDS);
+    const seen = {};
+    const uniq = list.filter(c => { if (!c || seen[c]) return false; seen[c] = 1; return true; });
+
+    for (const c of uniq) {
+      try {
+        const ctrl = new AbortController();
+        const t = setTimeout(() => ctrl.abort(), 2000);
+        const r = await fetch(c + '/api/myip', { signal: ctrl.signal, cache: 'no-store' });
+        clearTimeout(t);
+        if (r && (r.ok || r.status === 403)) {
+          RESOLVED = c;
+          if (!custom) $('srv').value = c;
+          return c;
+        }
+      } catch (e) {}
+    }
+    RESOLVED = '';
+    return '';
+  }
+  $('srv').addEventListener('input', function(){ USER_TYPED = true; RESOLVED = ''; });
   let OPEN = {};
 
-  async function reload(){ await loadMyIp(); await load(); }
+  async function reload(){ RESOLVED=''; await resolveBase(); await loadMyIp(); await load(); }
 
   async function load(){
     try{
+      if (!RESOLVED) await resolveBase();
+      if (!RESOLVED) {
+        $('tb').innerHTML = '<tr><td colspan="6" class="muted">连不上后端 API。已尝试：' +
+          (($('srv').value||'').trim() || location.origin) + ' / ' + FALLBACK_BACKENDS.join(' / ') +
+          '。请确认 Web Service 已启动（Render 免费实例休眠时需先唤醒），或在「服务地址」手动填写。</td></tr>';
+        return;
+      }
       const url = BASE() + '/api/visits?token=' + encodeURIComponent(TOKEN());
       let r = await fetch(url);
       if(r.status === 404) r = await fetch(BASE() + '/api/logs?token=' + encodeURIComponent(TOKEN()));
@@ -133,6 +183,7 @@
 
   async function clearLogs(){
     if(!confirm('确定清空全部访问记录？')) return;
+    if (!RESOLVED) await resolveBase();
     const cu = BASE() + '/api/visits/clear?token=' + encodeURIComponent(TOKEN());
     let cr = await fetch(cu);
     if(cr.status === 404) await fetch(BASE() + '/api/clear?token=' + encodeURIComponent(TOKEN()));
@@ -143,6 +194,8 @@
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
   async function loadMyIp(){
+    if (!RESOLVED) await resolveBase();
+    if (!RESOLVED) { $('myip').textContent='获取失败'; $('mysrc').textContent='后端 API 未启动'; return; }
     try{
       const r = await fetch(BASE() + '/api/myip', {cache:'no-store'});
       const d = await r.json();
@@ -151,8 +204,7 @@
     }catch(e){ $('myip').textContent='获取失败'; $('mysrc').textContent = e.message || '无法连接服务'; }
   }
 
-  loadMyIp();
-  load();
+  resolveBase().then(()=>{ loadMyIp(); load(); });
   setInterval(()=>{ if($('auto').checked) load(); }, 5000);
 </script>
 </body>
