@@ -67,8 +67,8 @@
   // 场景 B：页面在 Render Static Site，API 在另一个 Web Service -> 走第 2/3 候选
   // 场景 C：本地 file:// 双击打开 -> 走本机端口候选
   const FALLBACK_BACKENDS = [
-    'https://yg-static-site-v2.onrender.com',  // API 服务所在域名（与页面同源时也走这条）
-    'https://yg-ip-log.onrender.com',           // 若另开了独立 API 服务，改成它的域名
+    'https://yg-static-site-web.onrender.com', // 新的 Node Web Service（真实 IP 后端，日志接口可用）
+    'https://yg-static-site-v2.onrender.com',  // 旧 Static Site（仅静态页，/api/* 404）
     'http://127.0.0.1:8099',
     'http://127.0.0.1:8080'
   ];
