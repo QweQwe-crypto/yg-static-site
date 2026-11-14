@@ -38,8 +38,10 @@
     <span id="sum"></span>
   </div>
   <div class="bar">
+    <span class="muted">服务地址</span>
+    <input id="srv" placeholder="留空=同源当前站点" value="" style="width:230px" title="同源打开留空即可；跨站访问时填 http://主机:端口">
     <input id="token" placeholder="token" value="123456" style="width:110px">
-    <button onclick="load()">刷新</button>
+    <button onclick="reload()">刷新</button>
     <label class="muted"><input type="checkbox" id="auto" checked> 自动刷新(5s)</label>
     <button onclick="clearLogs()">清空日志</button>
     <span class="muted">点任意一行看完整 XFF 链路 / 原始报文</span>
@@ -59,13 +61,24 @@
 <script>
   const $ = id => document.getElementById(id);
   const TOKEN = () => $('token').value.trim();
+  // 服务地址：同源打开时留空（走相对路径，最稳）；本地 file:// 打开时才需要填地址
+  const BASE = () => {
+    const v = ($('srv').value || '').trim().replace(/\/+$/, '');
+    if (v) return v;
+    return location.origin;
+  };
   let OPEN = {};
+
+  async function reload(){ await loadMyIp(); await load(); }
 
   async function load(){
     try{
-      const r = await fetch('/api/logs?token=' + encodeURIComponent(TOKEN()));
-      const d = await r.json();
-      if(!Array.isArray(d)){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">' + esc(d.error||'出错') + '</td></tr>'; return; }
+      const url = BASE() + '/api/visits?token=' + encodeURIComponent(TOKEN());
+      let r = await fetch(url);
+      if(r.status === 404) r = await fetch(BASE() + '/api/logs?token=' + encodeURIComponent(TOKEN()));
+      const j = await r.json();
+      const d = Array.isArray(j) ? j : (Array.isArray(j.logs) ? j.logs : null);
+      if(!d){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">' + esc((j && (j.message||j.error)) || ('HTTP ' + r.status)) + '</td></tr>'; return; }
       $('sum').textContent = '共 ' + d.length + ' 条（最新在前）';
       if(!d.length){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">暂无记录</td></tr>'; return; }
       let html = '';
@@ -74,8 +87,8 @@
         const chainHtml = chain.length
           ? chain.map((c,j)=>'<span title="第'+(j+1)+'跳">' + esc(c) + '</span>').join(' <span class="muted">→</span> ')
           : '<span class="muted">无 XFF（直连）</span>';
-        const srcTag = /XFF最后一段/.test(x.ipSource||'') ? '<span class="tag xff">XFF末段</span>'
-          : /CDN/.test(x.ipSource||'') ? '<span class="tag cdn">CDN头</span>'
+        const srcTag = /CDN头/.test(x.ipSource||'') ? '<span class="tag cdn">CDN头</span>'
+          : /XFF/.test(x.ipSource||'') ? '<span class="tag xff">XFF</span>'
           : '<span class="tag">直连</span>';
         html += '<tr class="row" onclick="toggle('+i+')">'
           + '<td>' + esc(fmt(x.time)) + '</td>'
@@ -88,7 +101,7 @@
         html += '<tr class="detail" id="d'+i+'" style="display:'+(OPEN[i]?'table-row':'none')+'"><td colspan="6"><pre>' + esc(detail(x)) + '</pre></td></tr>';
       });
       $('tb').innerHTML = html;
-    }catch(e){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">请求失败</td></tr>'; }
+    }catch(e){ $('tb').innerHTML = '<tr><td colspan="6" class="muted">请求失败：' + esc(e.message || '无法连接服务，请检查"服务地址"是否填对（形如 http://127.0.0.1:8099）') + '</td></tr>'; }
   }
 
   function detail(x){
@@ -103,6 +116,8 @@
     if(chain.length){ chain.forEach((c,i)=> lines.push('   ['+(i+1)+'] ' + c + (i===chain.length-1 ? '   <= 真实IP(末段)' : ''))); }
     else lines.push('   （无 XFF 头，说明客户端直连服务器）');
     lines.push('TCP 直连IP  : ' + (x.socketIp || '-') + '   (通常是 CDN/反代节点)');
+    lines.push('直连来源可信: ' + (x.trustedProxy ? '是 (在可信代理名单内, 已采信其头部)' : '否 (不在名单内, XFF/CF 头已忽略)'));
+    if(x.cdnIp) lines.push('CDN 单值头  : ' + x.cdnIp);
     lines.push('请求        : ' + (x.method||'') + ' ' + (x.path||''));
     lines.push('来源页      : ' + (x.referer||'-'));
     lines.push('浏览器/系统 : ' + (x.client||'-'));
@@ -118,18 +133,25 @@
 
   async function clearLogs(){
     if(!confirm('确定清空全部访问记录？')) return;
-    await fetch('/api/clear?token=' + encodeURIComponent(TOKEN()));
+    const cu = BASE() + '/api/visits/clear?token=' + encodeURIComponent(TOKEN());
+    let cr = await fetch(cu);
+    if(cr.status === 404) await fetch(BASE() + '/api/clear?token=' + encodeURIComponent(TOKEN()));
     load();
   }
 
   function fmt(t){ const d = new Date(t); return isNaN(d) ? t : d.toLocaleString('zh-CN', {hour12:false}); }
   function esc(s){ return String(s==null?'':s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
-  fetch('/api/myip').then(r=>r.json()).then(d=>{
-    $('myip').textContent = d.realIp || d.ip || '-';
-    $('mysrc').textContent = d.source || '';
-  }).catch(()=>{ $('myip').textContent='获取失败'; });
+  async function loadMyIp(){
+    try{
+      const r = await fetch(BASE() + '/api/myip', {cache:'no-store'});
+      const d = await r.json();
+      $('myip').textContent = d.realIp || d.ip || '-';
+      $('mysrc').textContent = d.source || '';
+    }catch(e){ $('myip').textContent='获取失败'; $('mysrc').textContent = e.message || '无法连接服务'; }
+  }
 
+  loadMyIp();
   load();
   setInterval(()=>{ if($('auto').checked) load(); }, 5000);
 </script>

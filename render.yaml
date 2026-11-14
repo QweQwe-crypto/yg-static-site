@@ -1,0 +1,20 @@
+# 注意：Render 的 "Static Site" 不支持 Node 服务与 API 路由。
+# 本项目需要创建 type: web (Node) 服务，Static Site 只能跑纯静态。
+services:
+  - type: web
+    name: yg-ip-log
+    runtime: node
+    plan: free
+    buildCommand: ""
+    startCommand: node server.js
+    healthCheckPath: /api/myip
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: "22"
+      # Render 内部负载均衡是内网地址，必须信任内网才能读到 XFF
+      - key: TRUST_PRIVATE
+        value: "1"
+      # 后台 token：在 Render Dashboard 里填自己的强密码（sync: false 不入库）
+      - key: ADMIN_TOKEN
+        sync: false

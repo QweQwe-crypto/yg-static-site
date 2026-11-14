@@ -1,0 +1,13 @@
+{
+  "name": "yg-static-site",
+  "version": "2.0.0",
+  "description": "个人静态站点 + 访客真实 IP 访问日志",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
