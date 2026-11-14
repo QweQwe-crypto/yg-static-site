@@ -21,7 +21,8 @@ const os = require('os');
 const PORT = process.env.PORT || 8099;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '123456';
 const ROOT = __dirname;
-const LOG_FILE = path.join(ROOT, 'visits.log');
+// 日志文件：优先放 Render 持久化磁盘，其次本地目录
+const LOG_FILE = process.env.LOG_FILE || path.join(ROOT, 'visits.log');
 const HTML_FILE = path.join(ROOT, 'jilu.html');
 const TRUSTED_FILE = path.join(ROOT, 'trusted-proxy.txt');
 

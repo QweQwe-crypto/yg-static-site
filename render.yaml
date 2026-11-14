@@ -1,8 +1,13 @@
-# 注意：Render 的 "Static Site" 不支持 Node 服务与 API 路由。
-# 本项目需要创建 type: web (Node) 服务，Static Site 只能跑纯静态。
+# Render Blueprint —— 用仓库直接创建 Web Service
+#
+# 注意：本项目必须建 type: web (Node)，不能用 Static Site
+#       Static Site 只托管静态文件，没有 Node 运行时，/api/* 全部 404。
+#
+# 创建方式：Render Dashboard -> New -> Blueprint -> 选本仓库 -> Apply
+# 或：把下面内容粘进 Render Dashboard 的 render.yaml 编辑器。
 services:
   - type: web
-    name: yg-ip-log
+    name: yg-static-site-v2        # 换成你要用的服务名（会决定 *.onrender.com 域名）
     runtime: node
     plan: free
     buildCommand: ""
@@ -12,9 +17,15 @@ services:
     envVars:
       - key: NODE_VERSION
         value: "22"
-      # Render 内部负载均衡是内网地址，必须信任内网才能读到 XFF
+      # Render 内部负载均衡走内网地址，必须信任内网，
+      # 否则 XFF 里的访客 IP 会被当成伪造丢弃
       - key: TRUST_PRIVATE
         value: "1"
-      # 后台 token：在 Render Dashboard 里填自己的强密码（sync: false 不入库）
+      # 后台 token：在 Dashboard 里手动填强密码，不要用默认值
       - key: ADMIN_TOKEN
         sync: false
+    disk:
+      # 持久化日志磁盘，实例重启/休眠唤醒后访问记录不丢
+      name: iplog-data
+      mountPath: /var/data
+      sizeGB: 1
