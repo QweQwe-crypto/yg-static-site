@@ -1,0 +1,15 @@
+@charset "utf-8";
+/* CSS Document */
+body,form,img,ol,ul,li,h1,h2,h3,h4,h5,p{margin:0; padding:0;}
+body {background:#FFFFFF; margin: 0px; font-size:12px; line-height:21px; color:#333333;font: 14px/1.8 Helvetica Neue,Helvetica,PingFang SC,Microsoft YaHei,Hiragino Sans GB,WenQuanYi Micro Hei,Arial,sans-serif;}
+a,a:link,a:visited {color:#00bac7; text-decoration:none;}
+a:hover {text-decoration:underline;}
+img{border:0;}
+@media print {
+    body{
+       -webkit-print-color-adjust:exact;
+       -moz-print-color-adjust:exact;
+       -ms-print-color-adjust:exact;
+       print-color-adjust:exact;
+   } 
+}

@@ -1,0 +1,15 @@
+
+@font-face {font-family: "iconfont";
+  src: url('iconfont.eot.25a575ec.bin'); /* IE9*/
+  src: url('iconfont.eot.25a575ec.bin#iefix') format('embedded-opentype'), /* IE6-IE8 */
+  url('iconfont.woff.25e7dea8.bin') format('woff'), /* chrome, firefox */
+  url('iconfont.ttf.4aec61cb.bin') format('truetype'), /* chrome, firefox, opera, Safari, Android, iOS 4.2+*/
+  url('iconfont.svg.b4cc3cef.bin') format('svg'); /* iOS 4.1- */
+}
+.iconfont {
+  font-family:"iconfont" !important;
+  font-size:16px;
+  font-style:normal;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}

@@ -675,6 +675,19 @@ const server = http.createServer(async (req, res) => {
     return tryNext();
   }
 
+  // 日志页门禁：设置了 LOG_PAGE_TOKEN 后，/jilu.html 必须带 ?token= 或 Bearer 头
+  if (p === '/jilu.html' && LOG_PAGE_TOKEN) {
+    const need = LOG_PAGE_TOKEN;
+    const q = u.searchParams.get('token') || '';
+    const auth = String(req.headers.authorization || '');
+    const bearer = /^Bearer\s+(.+)$/i.exec(auth);
+    const ok = q === need || (bearer && bearer[1] === need);
+    if (!ok) {
+      res.writeHead(401, Object.assign({ 'Content-Type': 'text/plain; charset=utf-8' }, CORS, SEC_HEADERS));
+      return res.end('401 需要访问令牌：/jilu.html?token=YOUR_TOKEN');
+    }
+  }
+
   // 历史拼写兼容
   if (p === '/jillu.html') {
     res.writeHead(302, { Location: '/jilu.html' });
