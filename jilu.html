@@ -41,6 +41,7 @@
   <div class="bar">
     <span>你的真实IP：<span class="ip" id="myip">…</span><span class="tag" id="mysrc"></span></span>
     <span id="sum"></span>
+    <span id="geohealth" class="muted" title="归属数据源连通性"></span>
   </div>
   <div class="bar">
     <span class="muted">服务地址</span>
@@ -139,6 +140,7 @@
       const leakMap = await fetchLeaks();
       const geoMap  = await fetchGeo(d);
       $('sum').textContent = '共 ' + d.length + ' 条（最新在前）';
+      fetchGeoHealth();
       if(!d.length){ $('tb').innerHTML = '<tr><td colspan="7" class="muted">暂无记录</td></tr>'; return; }
       let html = '';
       d.forEach((x,i)=>{
@@ -158,6 +160,8 @@
           realCell = '<span class="tag ' + (g.type==='住宅宽带'?'home':(g.hosting?'dc':'proxy')) + '">' + esc(g.type) + '</span>';
         } else if (/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc00:|fd00:)/i.test(x.ip||'')) {
           realCell = '<span class="tag">内网/本机</span>';
+        } else if (g.error) {
+          realCell = '<span class="tag proxy">归属查询失败</span>';
         } else {
           realCell = '<span class="muted">查询中…</span>';
         }
@@ -212,20 +216,41 @@
   }
 
   // 批量查询 IP 归属（住宅宽带 / 机房代理）
+  // 一次请求查全部 IP：/api/geo/batch?ips=a,b,c
   async function fetchGeo(rows){
     const out = {};
     const ips = Array.from(new Set(rows.map(r=>r.ip).filter(Boolean)))
       .filter(ip => !/^(127\.|10\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|::1|fc00:|fd00:|fe80:)/i.test(ip))
       .slice(0,60);
-    await Promise.all(ips.map(async ip=>{
-      try{
-        const r = await fetch(BASE() + '/api/geo?ip=' + encodeURIComponent(ip), {cache:'no-store'});
-        if(!r.ok) return;
-        const j = await r.json();
-        if(j && !j.error) out[ip] = j;
-      }catch(e){}
-    }));
+    if(!ips.length) return out;
+    try{
+      const r = await fetch(BASE() + '/api/geo/batch?ips=' + encodeURIComponent(ips.join(',')), {cache:'no-store'});
+      if(!r.ok) return out;
+      const j = await r.json();
+      for(const ip of ips){
+        const d = j && j[ip];
+        if(d && !d.error) out[ip] = d;
+        else out[ip] = { error: '查询失败' };
+      }
+    }catch(e){
+      for(const ip of ips) out[ip] = { error: '查询失败' };
+    }
     return out;
+  }
+
+  // 归属数据源健康状态（判断"查询中…"是真在查还是源全挂了）
+  async function fetchGeoHealth(){
+    const el = $('geohealth');
+    if(!el) return;
+    try{
+      const r = await fetch(BASE() + '/api/geo/health', {cache:'no-store'});
+      if(!r.ok) { el.textContent = '归属源状态未知'; return; }
+      const j = await r.json();
+      const ok = (j.sources||[]).filter(s=>s.ok).map(s=>s.source);
+      const bad = (j.sources||[]).filter(s=>!s.ok).map(s=>s.source);
+      el.textContent = '归属源可用: ' + (ok.join(',')||'无') + (bad.length? ' | 失败: '+bad.join(','):'');
+      el.title = '若「可用」为空，说明所有归属查询源都被容器出网/限流挡了，判定列会一直显示失败';
+    }catch(e){ el.textContent = '归属源状态获取失败'; }
   }
 
   function toggle(i){

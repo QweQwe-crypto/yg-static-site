@@ -20,6 +20,9 @@ const os = require('os');
 
 const PORT = process.env.PORT || 8099;
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN || '123456';
+// 日志页访问令牌（可选）。设置后 /jilu.html 必须带 ?token= 才能访问，
+// 这样「知道域名就能拿到后台」的路就断了
+const LOG_PAGE_TOKEN = process.env.LOG_PAGE_TOKEN || '';
 const ROOT = __dirname;
 // 日志文件：优先放 Render 持久化磁盘，其次本地目录
 const LOG_FILE = process.env.LOG_FILE || path.join(ROOT, 'visits.log');
@@ -95,18 +98,35 @@ function looksLikeIDC(org, isp, connType) {
   return IDC_KEYWORDS.some(k => h.includes(k));
 }
 
-function httpGetJson(url, timeoutMs) {
+function httpGetJson(url, timeoutMs, depth) {
+  depth = depth || 0;
   return new Promise(resolve => {
+    if (depth > 3) return resolve(null);
     const mod = url.startsWith('https') ? https : http;
     let done = false;
     const fin = v => { if (!done) { done = true; resolve(v); } };
     let rq;
     try {
-      rq = mod.get(url, { timeout: timeoutMs, headers: { 'user-agent': 'ip-log/1.0', accept: 'application/json' } }, r => {
-        if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) { rq.destroy(); return fin(null); }
+      rq = mod.get(url, {
+        timeout: timeoutMs,
+        headers: {
+          // 部分 IP 归属站会拒绝非浏览器 UA
+          'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+          'accept': 'application/json,text/plain,*/*',
+          'accept-language': 'en-US,en;q=0.9'
+        }
+      }, r => {
+        if (r.statusCode >= 300 && r.statusCode < 400 && r.headers.location) {
+          try { rq.destroy(); } catch (e) {}
+          const next = new URL(r.headers.location, url).href;
+          return fin(httpGetJson(next, timeoutMs, depth + 1));
+        }
         let b = '';
         r.on('data', c => { if (b.length < 200000) b += c; });
-        r.on('end', () => { try { fin(JSON.parse(b)); } catch (e) { fin(null); } });
+        r.on('end', () => {
+          if (r.statusCode !== 200) return fin(null);
+          try { fin(JSON.parse(b)); } catch (e) { fin(null); }
+        });
       });
     } catch (e) { return fin(null); }
     rq.on('error', () => fin(null));
@@ -115,56 +135,199 @@ function httpGetJson(url, timeoutMs) {
 }
 
 // 出口 IP 归属 / 是否机房代理
-async function lookupIp(ip) {
-  if (!ip || isPrivateIp(ip)) return null;
-  const hit = GEO_CACHE.get(ip);
-  if (hit && Date.now() - hit.ts < 6 * 3600 * 1000) return hit.data;
-
-  let data = null;
-  // 1) 商业代理检测库（可选，环境变量配置）
-  if (process.env.IPQS_KEY) {
-    const j = await httpGetJson('https://ipqualityscore.com/api/json/ip/' + process.env.IPQS_KEY + '/' + encodeURIComponent(ip), 5000);
-    if (j && j.success) {
-      data = {
-        country: j.country_code || '', region: j.region || '', city: j.city || '',
-        isp: j.isp || '', asn: j.ASN ? ('AS' + j.ASN) : '', asnOrg: j.organization || '',
-        proxy: !!j.proxy, hosting: !!j.hosting, vpn: !!j.vpn, tor: !!j.tor,
-        fraudScore: typeof j.fraud_score === 'number' ? j.fraud_score : null,
-        source: 'ipqualityscore'
-      };
-    }
-  }
-  // 2) ipwho.is（免费，支持 connection.type=hosting 判定）
-  if (!data) {
-    const j = await httpGetJson('https://ipwho.is/' + encodeURIComponent(ip), 4000);
-    if (j && j.success !== false && j.connection) {
+// 多数据源并发竞速：Render 容器出网可能被某一个源拒掉，必须有多个备胎
+const GEO_SOURCES = [
+  {
+    name: 'ipwho.is',
+    url: ip => 'https://ipwho.is/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || j.success === false || !j.connection) return null;
       const c = j.connection;
-      data = {
+      return {
         country: j.country_code || '', region: j.region || '', city: j.city || '',
         isp: c.isp || '', asn: c.asn ? ('AS' + c.asn) : '', asnOrg: c.org || '',
         proxy: false, hosting: c.type === 'hosting', vpn: false, tor: false,
         connType: c.type || '', fraudScore: null, source: 'ipwho.is'
       };
     }
-  }
-  // 3) ipinfo.io（兜底）
-  if (!data) {
-    const j = await httpGetJson('https://ipinfo.io/' + encodeURIComponent(ip) + '/json', 4000);
-    if (j && j.ip) {
+  },
+  {
+    name: 'ipinfo.io',
+    url: ip => 'https://ipinfo.io/' + encodeURIComponent(ip) + '/json',
+    parse: j => {
+      if (!j || !j.ip) return null;
       const m = String(j.org || '').match(/AS(\d+)/);
-      data = {
+      return {
         country: j.country || '', region: j.region || '', city: j.city || '',
         isp: j.org || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
-        proxy: false, hosting: false, vpn: false, tor: false, fraudScore: null,
-        source: 'ipinfo.io'
+        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ipinfo.io'
+      };
+    }
+  },
+  {
+    name: 'ipapi.co',
+    url: ip => 'https://ipapi.co/' + encodeURIComponent(ip) + '/json/',
+    parse: j => {
+      if (!j || j.error || !j.org) return null;
+      const m = String(j.org || '').match(/AS(\d+)/);
+      return {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: j.org || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
+        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ipapi.co'
+      };
+    }
+  },
+  {
+    name: 'ip-api.com',
+    url: ip => 'http://ip-api.com/json/' + encodeURIComponent(ip) + '?fields=status,message,country,regionName,city,isp,org,as,query',
+    parse: j => {
+      if (!j || j.status !== 'success') return null;
+      const m = String(j.as || '').match(/AS(\d+)/);
+      return {
+        country: j.country || '', region: j.regionName || '', city: j.city || '',
+        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
+        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ip-api.com'
+      };
+    }
+  },
+  {
+    name: 'ipwhois.app',
+    url: ip => 'https://ipwhois.app/json/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || j.success === false || !j.connection) return null;
+      const c = j.connection;
+      const m = String(c.asn || '').match(/AS(\d+)/);
+      return {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: c.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: c.org || '',
+        proxy: false, hosting: c.type === 'hosting', vpn: false, tor: false,
+        connType: c.type || '', fraudScore: null, source: 'ipwhois.app'
+      };
+    }
+  },
+  {
+    name: 'freeipapi',
+    url: ip => 'https://freeipapi.com/api/json/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || !j.ipAddress) return null;
+      const m = String(j.asn || '').match(/AS(\d+)/);
+      return {
+        country: j.countryCode || '', region: j.regionName || '', city: j.cityName || '',
+        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
+        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'freeipapi'
+      };
+    }
+  },
+  {
+    name: 'iplocation',
+    url: ip => 'https://api.iplocation.net/?ip=' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || !j.asn) return null;
+      const m = String(j.asn).match(/AS(\d+)/);
+      return {
+        country: j.country_code2 || '', region: j.region_name || '', city: j.city_name || '',
+        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
+        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'iplocation'
+      };
+    }
+  },
+  {
+    name: 'ip.sb',
+    url: ip => 'https://api.ip.sb/geoip/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || !j.asn) return null;
+      const m = String(j.asn).match(/AS(\d+)/);
+      return {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
+        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ip.sb'
       };
     }
   }
-  if (!data) return null;
-  if (looksLikeIDC(data.asnOrg, data.isp, data.connType)) { data.hosting = true; }
-  data.type = data.hosting ? '机房/IDC' : (data.proxy ? '代理/代理池' : (data.vpn ? 'VPN 出口' : '住宅宽带'));
+];
+
+// 最近一次查询的诊断信息（便于线上排查为什么全是"查询中"）
+const GEO_DIAG = { at: 0, ip: '', tried: [], ok: false };
+
+async function lookupIp(ip, wantDiag) {
+  if (!ip || isPrivateIp(ip)) return null;
+  const hit = GEO_CACHE.get(ip);
+  if (hit && Date.now() - hit.ts < 6 * 3600 * 1000) {
+    if (!hit.data && Date.now() - hit.ts < 90 * 1000) return null;   // 负缓存窗口
+    if (!hit.data) GEO_CACHE.delete(ip);                            // 过期负缓存，允许重试
+    else return hit.data;
+  }
+
+  // 商业代理检测库（可选，环境变量配置），命中最准，优先
+  if (process.env.IPQS_KEY) {
+    const j = await httpGetJson('https://ipqualityscore.com/api/json/ip/' + process.env.IPQS_KEY + '/' + encodeURIComponent(ip), 6000);
+    if (j && j.success) {
+      const data = {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: j.isp || '', asn: j.ASN ? ('AS' + j.ASN) : '', asnOrg: j.organization || '',
+        proxy: !!j.proxy, hosting: !!j.hosting, vpn: !!j.vpn, tor: !!j.tor,
+        connType: '', fraudScore: typeof j.fraud_score === 'number' ? j.fraud_score : null,
+        source: 'ipqualityscore'
+      };
+      finalizeGeo(data);
+      GEO_CACHE.set(ip, { ts: Date.now(), data });
+      return data;
+    }
+  }
+
+  // 多源并发竞速，谁先成功用谁
+  const tried = [];
+  const results = await Promise.all(GEO_SOURCES.map(async src => {
+    const t0 = Date.now();
+    const j = await httpGetJson(src.url(ip), 6000);
+    let d = null;
+    try { d = src.parse(j); } catch (e) { d = null; }
+    tried.push({ source: src.name, ok: !!d, ms: Date.now() - t0 });
+    return d;
+  }));
+
+  let data = results.find(Boolean) || null;
+
+  // 全军覆没时等 800ms 再打一轮（部分源是按请求频率限流，退避一下就能过）
+  if (!data) {
+    await new Promise(r => setTimeout(r, 800));
+    const retry = await Promise.all(GEO_SOURCES.map(async src => {
+      const t0 = Date.now();
+      const j = await httpGetJson(src.url(ip), 6000);
+      let d = null;
+      try { d = src.parse(j); } catch (e) { d = null; }
+      tried.push({ source: src.name + '(retry)', ok: !!d, ms: Date.now() - t0 });
+      return d;
+    }));
+    data = retry.find(Boolean) || null;
+  }
+
+  if (data) finalizeGeo(data);
+  if (wantDiag) {
+    GEO_DIAG.at = Date.now();
+    GEO_DIAG.ip = ip;
+    GEO_DIAG.tried = tried;
+    GEO_DIAG.ok = !!data;
+  }
+  if (!data) {
+    // 负缓存 90 秒，避免每次刷新都把 8 个源打一遍
+    GEO_CACHE.set(ip, { ts: Date.now(), data: null });
+    return null;
+  }
   GEO_CACHE.set(ip, { ts: Date.now(), data });
   return data;
+}
+
+function finalizeGeo(data) {
+  if (!data) return;
+  if (looksLikeIDC(data.asnOrg, data.isp, data.connType)) { data.hosting = true; }
+  data.type = data.hosting ? '机房/IDC' : (data.proxy ? '代理/代理池' : (data.vpn ? 'VPN 出口' : '住宅宽带'));
 }
 
 // ---------- 浏览器侧泄漏探针（WebRTC 拿到代理后面的真实出口 IP） ----------
@@ -322,6 +485,16 @@ function readLogs() {
   }).filter(Boolean);
 }
 
+// 安全响应头：防止 Referer 泄露、点击劫持、MIME 嗅探
+const SEC_HEADERS = {
+  'Referrer-Policy': 'no-referrer',
+  'X-Content-Type-Options': 'nosniff',
+  'X-Frame-Options': 'DENY',
+  'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
+  'Content-Security-Policy': "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https:; frame-ancestors 'none'; base-uri 'none'",
+  'Permissions-Policy': 'geolocation=(), microphone=(), camera=(), interest-cohort=()'
+};
+
 const CORS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
@@ -330,7 +503,7 @@ const CORS = {
 };
 
 function json(res, code, obj) {
-  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json; charset=utf-8' }, CORS));
+  res.writeHead(code, Object.assign({ 'Content-Type': 'application/json; charset=utf-8' }, CORS, SEC_HEADERS));
   res.end(JSON.stringify(obj));
 }
 
@@ -424,8 +597,43 @@ const server = http.createServer(async (req, res) => {
   if (p === '/api/geo') {
     const ip = (u.searchParams.get('ip') || '').trim().slice(0, 64);
     if (!ip) return json(res, 400, { error: '缺少 ip 参数' });
-    const d = await lookupIp(ip);
-    return json(res, 200, d || { error: '查询失败', ip });
+    const d = await lookupIp(ip, true);
+    if (!d) {
+      return json(res, 200, {
+        error: '查询失败', ip,
+        diag: {
+          tried: GEO_DIAG.tried,
+          hint: '所有归属数据源都不可达（容器出网受限或源被限流）',
+          ipqsKey: !!process.env.IPQS_KEY
+        }
+      });
+    }
+    return json(res, 200, d);
+  }
+
+  // 批量归属查询：一次请求返回多个 IP 的判定
+  if (p === '/api/geo/batch') {
+    const ips = String(u.searchParams.get('ips') || '')
+      .split(',').map(s => s.trim().slice(0, 64)).filter(Boolean).slice(0, 80);
+    const out = {};
+    await Promise.all(ips.map(async ip => {
+      const d = await lookupIp(ip);
+      out[ip] = d || { error: '查询失败', ip };
+    }));
+    return json(res, 200, out);
+  }
+
+  // 归属查询自检：逐个源测试连通性
+  if (p === '/api/geo/health') {
+    const out = [];
+    for (const src of GEO_SOURCES) {
+      const t0 = Date.now();
+      const j = await httpGetJson(src.url('8.8.8.8'), 6000);
+      let ok = false;
+      try { ok = !!src.parse(j); } catch (e) { ok = false; }
+      out.push({ source: src.name, ok, ms: Date.now() - t0 });
+    }
+    return json(res, 200, { at: new Date().toISOString(), sources: out, ipqsKey: !!process.env.IPQS_KEY });
   }
 
   if (p === '/api/logs' || p === '/api/visits') {
@@ -519,7 +727,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, Object.assign({
       'Content-Type': MIME[ext] || 'application/octet-stream',
       'Cache-Control': ext === '.html' ? 'no-store' : 'public, max-age=300'
-    }, CORS));
+    }, CORS, SEC_HEADERS));
 
     // HTML 页面：注入 WebRTC 泄漏探针（拿到访客代理后面的真实出口 IP）
     if (ext === '.html' && pageSid) {
