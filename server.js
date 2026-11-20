@@ -138,6 +138,36 @@ function httpGetJson(url, timeoutMs, depth) {
 // 多数据源并发竞速：Render 容器出网可能被某一个源拒掉，必须有多个备胎
 const GEO_SOURCES = [
   {
+    name: 'freeipapi',
+    url: ip => 'https://freeipapi.com/api/json/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || !j.ipAddress) return null;
+      const rawAsn = String(j.asn || '').replace(/^AS/i, '');
+      const org = j.asnOrganization || j.asn_organization || '';
+      return {
+        country: j.countryCode || '', region: j.regionName || '', city: j.cityName || '',
+        isp: j.isp || org, asn: rawAsn ? ('AS' + rawAsn) : '', asnOrg: org,
+        proxy: !!j.isProxy, hosting: looksLikeIDC(org, j.isp || org, ''),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'freeipapi'
+      };
+    }
+  },
+  {
+    name: 'ip.sb',
+    url: ip => 'https://api.ip.sb/geoip/' + encodeURIComponent(ip),
+    parse: j => {
+      if (!j || !j.asn) return null;
+      const rawAsn = String(j.asn).replace(/^AS/i, '');
+      const org = j.asn_organization || j.organization || '';
+      return {
+        country: j.country_code || '', region: j.region || '', city: j.city || '',
+        isp: j.isp || org, asn: rawAsn ? ('AS' + rawAsn) : '', asnOrg: org,
+        proxy: false, hosting: looksLikeIDC(org, j.isp || org, ''),
+        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ip.sb'
+      };
+    }
+  },
+  {
     name: 'ipwho.is',
     url: ip => 'https://ipwho.is/' + encodeURIComponent(ip),
     parse: j => {
@@ -160,7 +190,7 @@ const GEO_SOURCES = [
       return {
         country: j.country || '', region: j.region || '', city: j.city || '',
         isp: j.org || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
-        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: looksLikeIDC(j.org, j.org, ''),
         vpn: false, tor: false, connType: '', fraudScore: null, source: 'ipinfo.io'
       };
     }
@@ -174,7 +204,7 @@ const GEO_SOURCES = [
       return {
         country: j.country_code || '', region: j.region || '', city: j.city || '',
         isp: j.org || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
-        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        proxy: false, hosting: looksLikeIDC(j.org, j.org, ''),
         vpn: false, tor: false, connType: '', fraudScore: null, source: 'ipapi.co'
       };
     }
@@ -188,7 +218,7 @@ const GEO_SOURCES = [
       return {
         country: j.country || '', region: j.regionName || '', city: j.city || '',
         isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.org || '',
-        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.org || '')),
+        proxy: /\b(cloud|hosting|vpn|proxy)\b/i.test(String(j.org || '')), hosting: looksLikeIDC(j.org, j.isp || '', ''),
         vpn: false, tor: false, connType: '', fraudScore: null, source: 'ip-api.com'
       };
     }
@@ -209,20 +239,6 @@ const GEO_SOURCES = [
     }
   },
   {
-    name: 'freeipapi',
-    url: ip => 'https://freeipapi.com/api/json/' + encodeURIComponent(ip),
-    parse: j => {
-      if (!j || !j.ipAddress) return null;
-      const m = String(j.asn || '').match(/AS(\d+)/);
-      return {
-        country: j.countryCode || '', region: j.regionName || '', city: j.cityName || '',
-        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
-        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
-        vpn: false, tor: false, connType: '', fraudScore: null, source: 'freeipapi'
-      };
-    }
-  },
-  {
     name: 'iplocation',
     url: ip => 'https://api.iplocation.net/?ip=' + encodeURIComponent(ip),
     parse: j => {
@@ -231,25 +247,11 @@ const GEO_SOURCES = [
       return {
         country: j.country_code2 || '', region: j.region_name || '', city: j.city_name || '',
         isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
-        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
+        proxy: false, hosting: looksLikeIDC(j.asn, j.isp || '', ''),
         vpn: false, tor: false, connType: '', fraudScore: null, source: 'iplocation'
       };
     }
   },
-  {
-    name: 'ip.sb',
-    url: ip => 'https://api.ip.sb/geoip/' + encodeURIComponent(ip),
-    parse: j => {
-      if (!j || !j.asn) return null;
-      const m = String(j.asn).match(/AS(\d+)/);
-      return {
-        country: j.country_code || '', region: j.region || '', city: j.city || '',
-        isp: j.isp || '', asn: m ? ('AS' + m[1]) : '', asnOrg: j.asn || '',
-        proxy: false, hosting: /\b(cloud|hosting|datacenter)\b/i.test(String(j.asn || '')),
-        vpn: false, tor: false, connType: '', fraudScore: null, source: 'ip.sb'
-      };
-    }
-  }
 ];
 
 // 最近一次查询的诊断信息（便于线上排查为什么全是"查询中"）
